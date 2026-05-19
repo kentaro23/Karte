@@ -25,3 +25,38 @@ a {
 button {
   font-family: inherit;
 }
+
+/* ── 帳票（A4印刷）共通 ── */
+.print-a4 {
+  background: #fff;
+  color: #000;
+  width: 210mm;
+  min-height: 297mm;
+  margin: 0 auto;
+  padding: 18mm 16mm;
+  box-sizing: border-box;
+  font-family: 'Hiragino Mincho ProN', 'Yu Mincho', serif;
+}
+.print-a4 .no-print {
+  display: block;
+}
+@media print {
+  html,
+  body {
+    background: #fff;
+  }
+  .print-a4 {
+    width: auto;
+    min-height: auto;
+    margin: 0;
+    padding: 14mm 14mm;
+    box-shadow: none;
+  }
+  .no-print {
+    display: none !important;
+  }
+  @page {
+    size: A4;
+    margin: 12mm;
+  }
+}

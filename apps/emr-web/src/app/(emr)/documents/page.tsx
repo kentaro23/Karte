@@ -1,7 +1,12 @@
 import { prisma } from '@medixus/db';
 import { Panel, PanelHeader, Badge, Icon, Button, Field, Input, Select, EmptyState } from '@medixus/ui';
 import { PageBody, PageHeader } from '@/components/page';
-import { createDocument } from './actions';
+import {
+  createDocument,
+  createDischargeSummary,
+  completeDischargeSummary,
+  approveDischargeSummary,
+} from './actions';
 
 export default async function DocumentsPage() {
   const [docs, summaries, patients] = await Promise.all([
@@ -9,6 +14,7 @@ export default async function DocumentsPage() {
     prisma.dischargeSummary.findMany({ orderBy: { createdAt: 'desc' }, take: 20 }),
     prisma.patient.findMany({ orderBy: { createdAt: 'asc' }, take: 40 }),
   ]);
+  const patMap = new Map(patients.map((p) => [p.id, p]));
   return (
     <PageBody>
       <PageHeader
@@ -57,24 +63,91 @@ export default async function DocumentsPage() {
           <Panel>
             <PanelHeader title="退院サマリ" icon={<Icon name="chart" size={15} />} />
             {summaries.length === 0 ? (
-              <EmptyState title="退院サマリはありません" />
+              <EmptyState title="退院サマリはありません（右で作成）" />
             ) : (
               <ul className="divide-y divide-line text-sm">
-                {summaries.map((sm) => (
-                  <li key={sm.id} className="flex items-center justify-between py-2">
-                    <span>退院サマリ #{sm.id.slice(0, 8)}</span>
-                    <span className="flex gap-2">
-                      <Badge tone={sm.status === 'COMPLETED' ? 'green' : 'amber'}>
-                        {sm.status === 'COMPLETED' ? '作成済' : '作成中'}
-                      </Badge>
-                      <Badge tone={sm.approvalStatus === 'APPROVED' ? 'green' : 'gray'}>
-                        {sm.approvalStatus === 'APPROVED' ? '承認済' : '未承認'}
-                      </Badge>
-                    </span>
-                  </li>
-                ))}
+                {summaries.map((sm) => {
+                  const p = sm.patientId ? patMap.get(sm.patientId) : undefined;
+                  return (
+                    <li key={sm.id} className="py-2">
+                      <div className="flex items-center justify-between">
+                        <span className="font-medium">
+                          {p ? `${p.kanjiLastName} ${p.kanjiFirstName}` : `#${sm.id.slice(0, 8)}`}
+                        </span>
+                        <span className="flex gap-2">
+                          <Badge tone={sm.status === 'COMPLETED' ? 'green' : 'amber'}>
+                            {sm.status === 'COMPLETED' ? '作成済' : '作成中'}
+                          </Badge>
+                          <Badge tone={sm.approvalStatus === 'APPROVED' ? 'green' : 'gray'}>
+                            {sm.approvalStatus === 'APPROVED' ? '承認済' : '未承認'}
+                          </Badge>
+                        </span>
+                      </div>
+                      {sm.hospitalCourse && (
+                        <p className="mt-0.5 line-clamp-2 text-2xs text-muted">
+                          経過: {sm.hospitalCourse}
+                        </p>
+                      )}
+                      <div className="mt-1 flex gap-2">
+                        {sm.status !== 'COMPLETED' && (
+                          <form action={completeDischargeSummary}>
+                            <input type="hidden" name="id" value={sm.id} />
+                            <Button size="sm" variant="ghost" type="submit">
+                              作成完了
+                            </Button>
+                          </form>
+                        )}
+                        {sm.status === 'COMPLETED' && sm.approvalStatus !== 'APPROVED' && (
+                          <form action={approveDischargeSummary}>
+                            <input type="hidden" name="id" value={sm.id} />
+                            <Button size="sm" variant="secondary" type="submit">
+                              承認
+                            </Button>
+                          </form>
+                        )}
+                      </div>
+                    </li>
+                  );
+                })}
               </ul>
             )}
+          </Panel>
+
+          <Panel>
+            <PanelHeader title="退院サマリ作成" icon={<Icon name="plus" size={15} />} />
+            <form action={createDischargeSummary} className="flex flex-col gap-2">
+              <Field label="患者" required>
+                <Select name="patientId" required defaultValue="">
+                  <option value="" disabled>
+                    選択
+                  </option>
+                  {patients.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.patientNo} {p.kanjiLastName} {p.kanjiFirstName}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+              {(
+                [
+                  ['admissionCourse', '入院までの経過'],
+                  ['presentIllness', '現症・主病名'],
+                  ['hospitalCourse', '入院後経過・治療'],
+                  ['dischargePlan', '退院時方針・処方・申し送り'],
+                ] as const
+              ).map(([name, label]) => (
+                <Field key={name} label={label}>
+                  <textarea
+                    name={name}
+                    rows={2}
+                    className="rounded border border-line px-2.5 py-1.5 text-sm"
+                  />
+                </Field>
+              ))}
+              <Button type="submit" variant="primary">
+                退院サマリを作成（作成中）
+              </Button>
+            </form>
           </Panel>
         </div>
 

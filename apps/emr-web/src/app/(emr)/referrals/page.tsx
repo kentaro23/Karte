@@ -70,14 +70,23 @@ export default async function ReferralsPage() {
                       <Badge tone={STATUS_TONE[r.status]}>{STATUS_LABEL[r.status]}</Badge>
                     </td>
                     <td className="px-2 py-1.5">
-                      {r.status !== 'CLOSED' && (
-                        <form action={advanceReferral}>
-                          <input type="hidden" name="id" value={r.id} />
-                          <Button size="sm" variant="ghost" type="submit">
-                            次の状態へ →
-                          </Button>
-                        </form>
-                      )}
+                      <div className="flex items-center gap-2">
+                        <a
+                          href={`/print/referral/${r.id}`}
+                          target="_blank"
+                          className="text-info underline"
+                        >
+                          印刷
+                        </a>
+                        {r.status !== 'CLOSED' && (
+                          <form action={advanceReferral}>
+                            <input type="hidden" name="id" value={r.id} />
+                            <Button size="sm" variant="ghost" type="submit">
+                              次の状態へ →
+                            </Button>
+                          </form>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}
