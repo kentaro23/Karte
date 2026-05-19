@@ -4,6 +4,23 @@ import { age } from '@medixus/domain';
 import { Panel, PanelHeader, Icon, Button, Field, Input, EmptyState } from '@medixus/ui';
 import { PageBody, PageHeader } from '@/components/page';
 import { addProgress } from '../actions';
+import { VitalsChart, type VitalPoint } from './vitals-chart';
+
+function parseVitals(body: string, at: Date): VitalPoint {
+  const num = (re: RegExp) => {
+    const m = re.exec(body);
+    return m ? Number(m[1]) : undefined;
+  };
+  const bp = /血圧\s*(\d+)\s*\/\s*(\d+)/.exec(body);
+  return {
+    at: at.toISOString(),
+    temp: num(/体温\s*([\d.]+)/),
+    pulse: num(/脈\s*(\d+)/),
+    spo2: num(/SpO2\s*(\d+)/),
+    sys: bp ? Number(bp[1]) : undefined,
+    dia: bp ? Number(bp[2]) : undefined,
+  };
+}
 
 export default async function ProgressPage({
   searchParams,
@@ -61,6 +78,20 @@ export default async function ProgressPage({
           </Panel>
         ) : (
           <div className="flex flex-col gap-4">
+            <Panel>
+              <PanelHeader
+                title="熱型表（体温・脈拍・血圧・SpO2）"
+                icon={<Icon name="chart" size={15} />}
+                desc="経過記録から自動グラフ化"
+              />
+              {records.length === 0 ? (
+                <EmptyState title="バイタル記録がありません（下のフォームから入力）" />
+              ) : (
+                <VitalsChart
+                  points={records.map((r): VitalPoint => parseVitals(r.body ?? '', r.createdAt))}
+                />
+              )}
+            </Panel>
             <Panel>
               <PanelHeader title="バイタル記録" icon={<Icon name="plus" size={15} />} />
               <form action={addProgress} className="grid grid-cols-2 gap-3 md:grid-cols-5">

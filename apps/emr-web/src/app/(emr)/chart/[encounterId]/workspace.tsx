@@ -24,6 +24,7 @@ import {
   removeDiagnosis,
   type RxItemInput,
 } from './actions';
+import { LabResultsPanel } from './labs';
 
 export interface ChartDx {
   id: string;
@@ -90,6 +91,7 @@ const RECORD_TYPES = [
 
 export function ChartWorkspace(props: {
   encounterId: string;
+  patientId: string;
   deptName: string;
   latestNote: { id: string; version: number; status: string } | null;
   initialBlocks: SoapBlock[];
@@ -318,6 +320,12 @@ export function ChartWorkspace(props: {
               {b.l}
             </div>
           ))}
+        </div>
+        <div className="border-y border-line px-3 py-2 text-xs font-bold text-ink">
+          検査結果
+        </div>
+        <div className="p-2">
+          <LabResultsPanel patientId={props.patientId} />
         </div>
         <div className="border-y border-line px-3 py-2 text-xs font-bold text-ink">
           処方（安全チェック）

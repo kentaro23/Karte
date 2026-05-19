@@ -121,6 +121,7 @@ export default async function ChartPage({
       <PatientBar p={bar} />
       <ChartWorkspace
         encounterId={encounterId}
+        patientId={enc.patient.id}
         deptName={dept?.name ?? '—'}
         latestNote={
           latest
