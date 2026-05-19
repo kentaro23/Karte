@@ -1,5 +1,8 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // Production build uses a SEPARATE dir so `next build` never corrupts the
+  // running `next dev` cache (set NEXT_DIST_DIR=.next-build in the build script).
+  distDir: process.env.NEXT_DIST_DIR || '.next',
   transpilePackages: [
     '@medixus/db',
     '@medixus/domain',
