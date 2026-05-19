@@ -262,3 +262,76 @@ export async function confirmPrescription(
   revalidatePath(`/chart/${encounterId}`);
   return { ok: true };
 }
+
+/* ── 病名（診断名）: カルテから 選択 / 自由記述 ── */
+
+export async function searchDiseases(q: string) {
+  const term = q.trim();
+  if (term.length < 1) return [];
+  const rows = await prisma.diseaseMaster.findMany({
+    where: {
+      OR: [{ name: { contains: term } }, { code: { contains: term } }],
+    },
+    take: 40,
+    orderBy: { name: 'asc' },
+    select: { code: true, name: true, icd10: true },
+  });
+  return rows.map((r) => ({ code: r.code, name: r.name, icd10: r.icd10[0] ?? '' }));
+}
+
+export async function addChartDiagnosis(
+  encounterId: string,
+  input: {
+    masterCode?: string | null;
+    displayName: string;
+    icd10?: string | null;
+    isMain?: boolean;
+    isSuspected?: boolean;
+  },
+) {
+  const s = await requireSession();
+  const name = input.displayName.trim();
+  if (!name) return { ok: false, error: '病名を入力してください' };
+  const enc = await prisma.encounter.findUniqueOrThrow({ where: { id: encounterId } });
+  const dx = await prisma.patientDiagnosis.create({
+    data: {
+      patientId: enc.patientId,
+      encounterId,
+      masterCode: input.masterCode ?? null,
+      displayName: name,
+      icd10: input.icd10 || null,
+      departmentId: enc.departmentId,
+      isMain: input.isMain ?? false,
+      isSuspected: input.isSuspected ?? false,
+      status: 'ACTIVE',
+      recordedByUserId: s.userId,
+    },
+  });
+  await writeAudit({
+    actorUserId: s.userId,
+    patientId: enc.patientId,
+    action: 'CHART_WRITE',
+    resource: 'PatientDiagnosis',
+    resourceId: dx.id,
+    detail: { name, icd10: input.icd10 ?? null, source: input.masterCode ? 'master' : 'free-text' },
+  });
+  revalidatePath(`/chart/${encounterId}`);
+  return { ok: true };
+}
+
+export async function removeDiagnosis(encounterId: string, id: string) {
+  const s = await requireSession();
+  const dx = await prisma.patientDiagnosis.update({
+    where: { id },
+    data: { status: 'DELETED' },
+  });
+  await writeAudit({
+    actorUserId: s.userId,
+    patientId: dx.patientId,
+    action: 'CHART_WRITE',
+    resource: 'PatientDiagnosis.delete',
+    resourceId: id,
+  });
+  revalidatePath(`/chart/${encounterId}`);
+  return { ok: true };
+}

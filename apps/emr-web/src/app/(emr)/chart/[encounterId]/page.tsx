@@ -45,7 +45,15 @@ export default async function ChartPage({
   // ── 病名(ICD10) → 適応薬リコメンド ──
   const activeDx = await prisma.patientDiagnosis.findMany({
     where: { patientId: enc.patient.id, status: 'ACTIVE' },
-    select: { displayName: true, icd10: true },
+    orderBy: [{ isMain: 'desc' }, { startDate: 'desc' }],
+    select: {
+      id: true,
+      displayName: true,
+      icd10: true,
+      isMain: true,
+      isSuspected: true,
+      masterCode: true,
+    },
   });
   const icd10s = [...new Set(activeDx.map((d) => d.icd10).filter((x): x is string => !!x))];
   const icd10ToDx = new Map(activeDx.filter((d) => d.icd10).map((d) => [d.icd10!, d.displayName]));
@@ -132,6 +140,14 @@ export default async function ChartPage({
         }))}
         drugs={drugs}
         recommended={recommended}
+        diagnoses={activeDx.map((d) => ({
+          id: d.id,
+          displayName: d.displayName,
+          icd10: d.icd10,
+          isMain: d.isMain,
+          isSuspected: d.isSuspected,
+          fromMaster: !!d.masterCode,
+        }))}
         prescriptions={prescriptions.map((rx) => ({
           id: rx.id,
           status: rx.status,

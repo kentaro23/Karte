@@ -19,8 +19,20 @@ import {
   amendNote,
   addPrescription,
   confirmPrescription,
+  searchDiseases,
+  addChartDiagnosis,
+  removeDiagnosis,
   type RxItemInput,
 } from './actions';
+
+export interface ChartDx {
+  id: string;
+  displayName: string;
+  icd10: string | null;
+  isMain: boolean;
+  isSuspected: boolean;
+  fromMaster: boolean;
+}
 
 type Drug = {
   id: string;
@@ -84,6 +96,7 @@ export function ChartWorkspace(props: {
   history: HistoryNote[];
   drugs: Drug[];
   recommended: { id: string; dx: string }[];
+  diagnoses: ChartDx[];
   prescriptions: Rx[];
 }) {
   const { encounterId } = props;
@@ -149,6 +162,7 @@ export function ChartWorkspace(props: {
 
       {/* ── CENTER: 記載 ── */}
       <section className="flex min-w-0 flex-col overflow-hidden bg-canvas">
+        <DiagnosisBar encounterId={props.encounterId} diagnoses={props.diagnoses} />
         <div className="flex items-center gap-2 border-b border-line bg-white px-3 py-1.5">
           <Tabs
             items={RECORD_TYPES.map((r) => ({ key: r.key, label: r.label }))}
@@ -371,6 +385,160 @@ export function ChartWorkspace(props: {
           setMsg('シェーマを添付しました');
         }}
       />
+    </div>
+  );
+}
+
+/** 病名（診断名）: カルテから マスタ選択 / 自由記述 で登録・削除。適応薬リコメンドに連携。 */
+function DiagnosisBar({
+  encounterId,
+  diagnoses,
+}: {
+  encounterId: string;
+  diagnoses: ChartDx[];
+}) {
+  const router = useRouter();
+  const [open, setOpen] = React.useState(false);
+  const [pending, start] = React.useTransition();
+  const [q, setQ] = React.useState('');
+  const [results, setResults] = React.useState<{ code: string; name: string; icd10: string }[]>([]);
+  const [searching, setSearching] = React.useState(false);
+  const [free, setFree] = React.useState('');
+  const [isMain, setIsMain] = React.useState(false);
+  const [isSuspected, setIsSuspected] = React.useState(false);
+
+  React.useEffect(() => {
+    const term = q.trim();
+    if (term.length < 1) {
+      setResults([]);
+      return;
+    }
+    setSearching(true);
+    const t = setTimeout(async () => {
+      try {
+        setResults(await searchDiseases(term));
+      } finally {
+        setSearching(false);
+      }
+    }, 250);
+    return () => clearTimeout(t);
+  }, [q]);
+
+  const add = (p: {
+    masterCode?: string | null;
+    displayName: string;
+    icd10?: string | null;
+  }) =>
+    start(async () => {
+      const r = await addChartDiagnosis(encounterId, {
+        ...p,
+        isMain,
+        isSuspected,
+      });
+      if (r.ok) {
+        setOpen(false);
+        setQ('');
+        setResults([]);
+        setFree('');
+        setIsMain(false);
+        setIsSuspected(false);
+        router.refresh();
+      }
+    });
+
+  return (
+    <div className="flex flex-wrap items-center gap-1.5 border-b border-line bg-white px-3 py-1.5">
+      <span className="text-2xs font-bold text-muted">病名</span>
+      {diagnoses.length === 0 && (
+        <span className="text-2xs text-muted/70">未登録</span>
+      )}
+      {diagnoses.map((d) => (
+        <span
+          key={d.id}
+          className={`inline-flex items-center gap-1 rounded border px-2 py-0.5 text-xs ${
+            d.isMain ? 'border-accent-300 bg-accent-50 text-accent-700' : 'border-line bg-soft'
+          }`}
+        >
+          {d.isMain && <span className="text-2xs font-bold">主</span>}
+          {d.isSuspected && <span className="text-2xs text-warn">疑</span>}
+          {d.displayName}
+          {d.icd10 && <span className="font-mono text-2xs text-muted">{d.icd10}</span>}
+          {!d.fromMaster && <span className="text-2xs text-muted">(自由)</span>}
+          <button
+            onClick={() => start(async () => { await removeDiagnosis(encounterId, d.id); router.refresh(); })}
+            className="ml-0.5 text-muted/60 hover:text-alert"
+            aria-label="削除"
+          >
+            <Icon name="x" size={11} />
+          </button>
+        </span>
+      ))}
+      <Button size="sm" variant="secondary" onClick={() => setOpen(true)} className="ml-1">
+        <Icon name="plus" size={12} /> 病名
+      </Button>
+
+      <Modal open={open} onClose={() => setOpen(false)} title="病名を追加（マスタ選択 / 自由記述）" width={560}>
+        <div className="flex items-center gap-3 pb-2 text-xs">
+          <label className="flex items-center gap-1">
+            <input type="checkbox" checked={isMain} onChange={(e) => setIsMain(e.target.checked)} /> 主病名
+          </label>
+          <label className="flex items-center gap-1">
+            <input type="checkbox" checked={isSuspected} onChange={(e) => setIsSuspected(e.target.checked)} /> 疑い
+          </label>
+          <span className="ml-auto text-2xs text-muted">傷病名マスタ 約2.7万件</span>
+        </div>
+
+        <Input
+          autoFocus
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="標準病名 / ICD10 で検索（例: 高血圧, 糖尿, J06）"
+          className="w-full"
+        />
+        <div className="mt-1 max-h-56 overflow-auto rounded border border-line">
+          {searching && <div className="px-2 py-2 text-2xs text-muted">検索中…</div>}
+          {!searching && q.trim() && results.length === 0 && (
+            <div className="px-2 py-2 text-2xs text-muted">該当なし（下の自由記述で登録できます）</div>
+          )}
+          {results.map((r) => (
+            <button
+              key={r.code}
+              disabled={pending}
+              onClick={() => add({ masterCode: r.code, displayName: r.name, icd10: r.icd10 || null })}
+              className="flex w-full items-center justify-between gap-2 border-b border-line/60 px-2 py-1.5 text-left text-xs last:border-0 hover:bg-accent-50"
+            >
+              <span className="truncate">{r.name}</span>
+              {r.icd10 && (
+                <span className="shrink-0 rounded bg-soft px-1 font-mono text-2xs text-muted">
+                  {r.icd10}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+
+        <div className="mt-3 border-t border-line pt-3">
+          <div className="mb-1 text-2xs font-bold text-muted">自由記述で追加</div>
+          <div className="flex gap-2">
+            <Input
+              value={free}
+              onChange={(e) => setFree(e.target.value)}
+              placeholder="マスタにない病名を直接入力"
+              className="flex-1"
+            />
+            <Button
+              variant="primary"
+              disabled={pending || free.trim().length < 1}
+              onClick={() => add({ displayName: free, masterCode: null, icd10: null })}
+            >
+              追加
+            </Button>
+          </div>
+          <p className="mt-1 text-2xs text-muted">
+            ※ 自由記述病名はICD10未付与（レセプト病名/適応リコメンドはマスタ選択推奨）
+          </p>
+        </div>
+      </Modal>
     </div>
   );
 }
