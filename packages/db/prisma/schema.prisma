@@ -1,0 +1,1388 @@
+// Medixus カルテ — hospital-grade Japanese EMR data model.
+// Aligns with Medixus_OS_設計書.html (M01/M04/M06/M12) and the 厚労省 174-item spec.
+// Regulatory core: append-only clinical records (電子保存の三原則), provenance-enforced
+// drug-safety data (NO AI source — enforced by the DrugDataSource enum type itself),
+// hash-chained audit, RBAC + per-patient ACL.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Enums
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum JobType {
+  DOCTOR
+  RESIDENT
+  NURSE
+  PHARMACIST
+  CLERK
+  TECHNOLOGIST
+  THERAPIST
+  DIETITIAN
+  MANAGER
+  ADMIN
+}
+
+enum Gender {
+  MALE
+  FEMALE
+  OTHER
+  UNKNOWN
+}
+
+enum ABO {
+  A
+  B
+  O
+  AB
+  UNKNOWN
+}
+
+enum Rh {
+  POSITIVE
+  NEGATIVE
+  UNKNOWN
+}
+
+enum EncounterType {
+  OUTPATIENT
+  INPATIENT
+  EMERGENCY
+  CHECKUP
+  HOMECARE
+}
+
+enum VisitType {
+  FIRST
+  RETURN
+}
+
+enum ContactType {
+  FACE
+  PHONE
+  ONLINE
+  NON_CONSULT
+}
+
+// 診察ステータス — 別紙1 §2.1(17)
+enum ReceptionStatus {
+  UNRECEIVED
+  ARRIVED
+  QUESTIONNAIRE_IN_PROGRESS
+  QUESTIONNAIRE_DONE
+  READY
+  IN_CONSULTATION
+  SUSPENDED
+  CONSULTATION_DONE
+  BILLING_DONE
+  CANCELLED
+  NO_SHOW
+}
+
+enum TriageLevel {
+  L1_RESUSCITATION
+  L2_EMERGENT
+  L3_URGENT
+  L4_LESS_URGENT
+  L5_NON_URGENT
+}
+
+enum AppointmentStatus {
+  BOOKED
+  CONFIRMED
+  ARRIVED
+  CANCELLED
+  NO_SHOW
+}
+
+enum NoteType {
+  PROGRESS
+  NURSING
+  NUTRITION
+  REPORT
+  REHAB
+  ER
+  ASSESSMENT
+  SYMPTOM_DETAIL
+}
+
+// ClinicalNote / Order version-chain status. SUPERSEDED rows are retained (見読性).
+enum RecordStatus {
+  EDITING
+  SAVED
+  LOCKED
+  SUPERSEDED
+}
+
+enum CountersignStatus {
+  UNAPPROVED
+  APPROVED
+  REJECTED
+}
+
+enum StickyScope {
+  PRIVATE
+  CLINIC_WIDE
+}
+
+enum TemplateScope {
+  COMMON
+  DEPARTMENT
+  DOCTOR
+}
+
+enum OrderType {
+  RX
+  INJECTION
+  TREATMENT
+  LAB
+  BACTERIOLOGY
+  PATHOLOGY
+  PHYSIOLOGY
+  RADIOLOGY
+  ENDOSCOPY
+  DIALYSIS
+  REHAB
+  GUIDANCE
+  CHEMO
+  SURGERY
+  TRANSFUSION
+  MEAL
+  REFERRAL
+}
+
+// オーダ実施ステータス状態機械
+enum OrderStatus {
+  DRAFT
+  REQUESTED
+  RECEIVED
+  IN_PROGRESS
+  PARTIALLY_DONE
+  DONE
+  RESULT_ARRIVED
+  APPROVED
+  CANCELLED
+  VOIDED
+}
+
+enum DispenseType {
+  IN_HOUSE
+  OUT_OF_HOUSE
+}
+
+enum AllergyType {
+  DRUG
+  FOOD
+  OTHER
+}
+
+// ★ Patient-safety boundary, enforced by the type itself: there is NO `AI` / `LLM`
+//   member, so the database physically cannot store an AI-sourced safety fact.
+enum DrugDataSource {
+  MHLW_RECEIPT
+  MEDIS
+  PMDA_PI_STRUCTURED
+  PMDA_PI_XML
+  PHARMACIST_VERIFIED
+  CURATED_SEED
+}
+
+enum DrugTargetKind {
+  PRODUCT
+  INGREDIENT
+}
+
+enum ContraSeverity {
+  ABSOLUTE
+  RELATIVE
+}
+
+enum ContraConditionType {
+  DISEASE
+  STATE
+  AGE
+  PREGNANCY
+  LACTATION
+  LAB
+  CO_ADMINISTRATION
+  HYPERSENSITIVITY
+}
+
+enum InteractionCounterpart {
+  DRUG_INGREDIENT
+  ATC_CLASS
+  FOOD
+  DRUG_PRODUCT
+}
+
+enum InteractionSeverity {
+  CONTRAINDICATED_COMBO
+  CAUTION_COMBO
+}
+
+enum DosagePopulation {
+  ADULT
+  PEDIATRIC
+  ELDERLY
+  NEONATE
+  PREGNANT
+}
+
+enum RuleCheckType {
+  CONTRAINDICATION
+  INTERACTION
+  DOSE_MAX
+  DUPLICATE
+  ALLERGY
+  DISEASE_CONTRA
+  PREGNANCY_LACTATION
+  RENAL
+  HEPATIC
+  AGE
+  INFECTION
+}
+
+enum RuleResult {
+  PASS
+  WARNING
+  BLOCKED
+}
+
+enum RuleCheckedBy {
+  STATIC_DB
+  PHARMACIST_REVIEW
+}
+
+enum AclLevel {
+  NO_ACCESS
+  PASSWORD_REQUIRED
+  VIEW_ONLY
+  VIEW_AND_WRITE
+}
+
+enum AclScope {
+  ALL
+  CARE_TEAM_ONLY
+}
+
+enum AuditAction {
+  LOGIN_SUCCESS
+  LOGIN_FAILURE
+  LOGOUT
+  USER_SWITCH
+  SCREENSAVER_UNLOCK
+  PATIENT_SELECT
+  CHART_OPEN
+  CHART_VIEW
+  CHART_WRITE
+  CHART_AMEND
+  ORDER_ISSUE
+  ORDER_CHECK
+  PRESCRIPTION_OVERRIDE
+  COUNTERSIGN
+  PRINT
+  FILE_EXPORT
+  RESTRICTED_ACCESS
+  MASTER_IMPORT
+  PATIENT_MERGE
+}
+
+enum MasterType {
+  DRUG
+  DISEASE
+  EXAM
+  MEDICAL_FEE
+  MATERIAL
+  GENERIC
+}
+
+enum ImportStatus {
+  RUNNING
+  SUCCESS
+  FAILED
+  ROLLED_BACK
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Organization
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Clinic {
+  id        String   @id @default(cuid())
+  name      String
+  kind      String   @default("CLINIC") // CLINIC | HOSPITAL
+  createdAt DateTime @default(now())
+
+  departments Department[]
+  wards       Ward[]
+  users       StaffUser[]
+  patients    Patient[]
+}
+
+model Department {
+  id       String  @id @default(cuid())
+  clinicId String
+  code     String
+  name     String
+  clinic   Clinic  @relation(fields: [clinicId], references: [id])
+
+  @@unique([clinicId, code])
+}
+
+model Ward {
+  id       String @id @default(cuid())
+  clinicId String
+  code     String
+  name     String
+  clinic   Clinic @relation(fields: [clinicId], references: [id])
+  rooms    Room[]
+
+  @@unique([clinicId, code])
+}
+
+model Room {
+  id           String @id @default(cuid())
+  wardId       String
+  code         String
+  genderPolicy String @default("MIXED") // MALE | FEMALE | MIXED
+  ward         Ward   @relation(fields: [wardId], references: [id])
+  beds         Bed[]
+
+  @@unique([wardId, code])
+}
+
+model Bed {
+  id     String @id @default(cuid())
+  roomId String
+  code   String
+  room   Room   @relation(fields: [roomId], references: [id])
+
+  @@unique([roomId, code])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Identity / Access (M01) — 別紙1 §1, 別紙3 #10-61, 174項 169-174
+// ─────────────────────────────────────────────────────────────────────────────
+
+model StaffUser {
+  id        String   @id @default(cuid())
+  clinicId  String
+  staffNo   String   @unique
+  loginId   String   @unique
+  name      String
+  nameKana  String
+  jobType   JobType
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  clinic      Clinic                  @relation(fields: [clinicId], references: [id])
+  credential  StaffCredential?
+  mfaFactors  MfaFactor[]
+  sessions    AuthSession[]
+  permissions UserPermission[]
+  favorites   UserFavoriteTool[]
+
+  @@index([clinicId, jobType])
+}
+
+model StaffCredential {
+  userId         String    @id
+  passwordHash   String // Argon2id — never reversible, never plaintext
+  validFrom      DateTime  @default(now())
+  validTo        DateTime?
+  expiresAt      DateTime? // password expiry — 別紙1 §1.1(3)
+  mustChange     Boolean   @default(false)
+  failedAttempts Int       @default(0)
+  lockedAt       DateTime?
+  updatedAt      DateTime  @updatedAt
+  user           StaffUser @relation(fields: [userId], references: [id])
+}
+
+model MfaFactor {
+  id        String    @id @default(cuid())
+  userId    String
+  type      String // TOTP | SMS | PASSKEY
+  secret    String
+  confirmed Boolean   @default(false)
+  createdAt DateTime  @default(now())
+  user      StaffUser @relation(fields: [userId], references: [id])
+}
+
+model LoginAttempt {
+  id         String   @id @default(cuid())
+  identifier String
+  userId     String?
+  success    Boolean
+  ip         String?
+  terminalId String?
+  createdAt  DateTime @default(now())
+
+  @@index([identifier, createdAt])
+}
+
+model AuthSession {
+  id           String    @id @default(cuid())
+  userId       String
+  terminalId   String?
+  prevLoginAt  DateTime? // 別紙3 #71 — user can self-check last login
+  prevTerminal String?
+  createdAt    DateTime  @default(now())
+  lastSeenAt   DateTime  @default(now())
+  expiresAt    DateTime
+  revokedAt    DateTime?
+  user         StaffUser @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+}
+
+// RBAC: job-type matrix + per-user override (別紙3 #35-39)
+model RolePermission {
+  id       String  @id @default(cuid())
+  jobType  JobType
+  resource String
+  action   String
+  allow    Boolean @default(true)
+
+  @@unique([jobType, resource, action])
+}
+
+model UserPermission {
+  id       String    @id @default(cuid())
+  userId   String
+  resource String
+  action   String
+  allow    Boolean
+  user     StaffUser @relation(fields: [userId], references: [id])
+
+  @@unique([userId, resource, action])
+}
+
+// Per-patient ACL overlay (別紙3 #50-55)
+model PatientAccessControl {
+  id        String   @id @default(cuid())
+  patientId String
+  level     AclLevel @default(VIEW_AND_WRITE)
+  scope     AclScope @default(ALL)
+  jobType   JobType? // null = applies to all
+  patient   Patient  @relation(fields: [patientId], references: [id])
+
+  @@index([patientId])
+}
+
+// Hash-chained, fully immutable audit log (別紙3 #25-30, 真正性).
+// db/triggers.sql forbids UPDATE/DELETE and computes rowHash from prevHash.
+model AuditEvent {
+  id         String      @id @default(cuid())
+  seq        BigInt      @default(autoincrement())
+  actorUserId String?
+  patientId  String?
+  action     AuditAction
+  resource   String?
+  resourceId String?
+  terminalId String?
+  ip         String?
+  result     String      @default("OK")
+  detail     Json?
+  prevHash   String?
+  rowHash    String?
+  createdAt  DateTime    @default(now())
+
+  @@index([patientId, createdAt])
+  @@index([actorUserId, createdAt])
+}
+
+// 排他制御 — 別紙1 §2.9(6), 別紙3 #5-6 / 174項174
+model ChartLock {
+  id             String   @id @default(cuid())
+  resourceType   String // "encounter" | "note"
+  resourceId     String
+  lockedByUserId String
+  lockedByName   String
+  terminalId     String
+  contact        String?
+  lockType       String   @default("WRITE")
+  acquiredAt     DateTime @default(now())
+  heartbeatAt    DateTime @default(now())
+
+  @@unique([resourceType, resourceId])
+}
+
+model UserFavoriteTool {
+  id        String    @id @default(cuid())
+  userId    String
+  toolKey   String
+  label     String
+  sortOrder Int       @default(0)
+  user      StaffUser @relation(fields: [userId], references: [id])
+
+  @@unique([userId, toolKey])
+}
+
+model SavedSearchCondition {
+  id            String @id @default(cuid())
+  userId        String
+  screenKey     String
+  name          String
+  conditionJson Json
+
+  @@index([userId, screenKey])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Patient & profile (M01/M02) — 別紙1 §3.5-3.6, 174項 9-15
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Patient {
+  id              String   @id @default(cuid())
+  clinicId        String
+  patientNo       String   @unique
+  kanaLastName    String
+  kanaFirstName   String
+  kanjiLastName   String
+  kanjiFirstName  String
+  formerName      String?
+  dateOfBirth     DateTime
+  gender          Gender
+  bloodTypeABO    ABO      @default(UNKNOWN)
+  bloodTypeRh     Rh       @default(UNKNOWN)
+  isVip           Boolean  @default(false)
+  vipPasswordHash String?
+  isTemporaryId   Boolean  @default(false)
+  photoUrl        String?
+  mergedIntoId    String? // 患者ID統合 (logical, never physical)
+  createdAt       DateTime @default(now())
+
+  clinic        Clinic                 @relation(fields: [clinicId], references: [id])
+  allergies     Allergy[]
+  infections    Infection[]
+  histories     MedicalHistory[]
+  family        FamilyMember[]
+  insurances    Insurance[]
+  profile       PatientProfile?
+  encounters    Encounter[]
+  appointments  Appointment[]
+  notes         ClinicalNote[]
+  orders        Order[]
+  acls          PatientAccessControl[]
+  diagnoses     PatientDiagnosis[]
+  referrals     Referral[]
+
+  @@index([clinicId])
+  @@index([kanaLastName, kanaFirstName])
+  @@index([kanjiLastName, kanjiFirstName])
+}
+
+model Allergy {
+  id             String      @id @default(cuid())
+  patientId      String
+  type           AllergyType
+  substance      String
+  ingredientCode String? // links to DrugIngredient for the rule engine
+  reaction       String?
+  severity       String?
+  recordedAt     DateTime    @default(now())
+  patient        Patient     @relation(fields: [patientId], references: [id])
+
+  @@index([patientId])
+}
+
+model Infection {
+  id        String    @id @default(cuid())
+  patientId String
+  pathogen  String
+  status    String
+  testedAt  DateTime?
+  patient   Patient   @relation(fields: [patientId], references: [id])
+
+  @@index([patientId])
+}
+
+model MedicalHistory {
+  id        String    @id @default(cuid())
+  patientId String
+  kind      String // PAST_ILLNESS | SURGERY | MEDICATION | TRANSFUSION
+  name      String
+  occurredOn DateTime?
+  patient   Patient   @relation(fields: [patientId], references: [id])
+
+  @@index([patientId])
+}
+
+model FamilyMember {
+  id               String  @id @default(cuid())
+  patientId        String
+  relation         String
+  name             String?
+  status           String?
+  relatedPatientId String?
+  patient          Patient @relation(fields: [patientId], references: [id])
+
+  @@index([patientId])
+}
+
+model Insurance {
+  id         String    @id @default(cuid())
+  patientId  String
+  payerType  String // SOCIAL | NATIONAL | LATE_ELDERLY | SELF_PAY | PUBLIC
+  payerNo    String?
+  symbol     String?
+  number     String?
+  validFrom  DateTime?
+  validTo    DateTime?
+  patient    Patient   @relation(fields: [patientId], references: [id])
+
+  @@index([patientId])
+}
+
+model PatientProfile {
+  patientId    String   @id
+  heightCm     Float?
+  weightKg     Float?
+  egfr         Float? // renal function for dose adjustment
+  hepaticClass String? // CHILD_PUGH_A/B/C
+  isPregnant   Boolean  @default(false)
+  isLactating  Boolean  @default(false)
+  smoking      Json?
+  drinking     Json?
+  customFields Json?
+  updatedAt    DateTime @updatedAt
+  patient      Patient  @relation(fields: [patientId], references: [id])
+}
+
+model PatientSelectionLog {
+  id         String   @id @default(cuid())
+  userId     String
+  patientId  String
+  selectedAt DateTime @default(now())
+
+  @@index([userId, selectedAt])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Scheduling / Reception (M03/M09) — 別紙1 §2, 174項 3-12
+// ─────────────────────────────────────────────────────────────────────────────
+
+model AppointmentSlot {
+  id           String   @id @default(cuid())
+  departmentId String
+  doctorUserId String?
+  startAt      DateTime
+  endAt        DateTime
+  capacity     Int      @default(1)
+
+  appointments Appointment[]
+
+  @@index([departmentId, startAt])
+}
+
+model Appointment {
+  id           String            @id @default(cuid())
+  patientId    String
+  departmentId String
+  doctorUserId String?
+  slotId       String?
+  scheduledAt  DateTime
+  kind         String            @default("CONSULT") // CONSULT | EXAM
+  status       AppointmentStatus @default(BOOKED)
+  comment      String?
+  createdAt    DateTime          @default(now())
+
+  patient   Patient          @relation(fields: [patientId], references: [id])
+  slot      AppointmentSlot? @relation(fields: [slotId], references: [id])
+  encounter Encounter?
+
+  @@index([departmentId, scheduledAt])
+  @@index([patientId])
+}
+
+// 受診エピソード — outpatient/inpatient/ER. The chart-level state holder.
+model Encounter {
+  id            String          @id @default(cuid())
+  patientId     String
+  appointmentId String?         @unique
+  encounterType EncounterType
+  visitType     VisitType?
+  contactType   ContactType     @default(FACE)
+  departmentId  String
+  wardId        String?
+  insuranceId   String?
+  receptionNo   Int?
+  receptionStatus ReceptionStatus @default(UNRECEIVED)
+  triageLevel   TriageLevel?
+  arrivalMethod String?
+  isTemporaryId Boolean         @default(false)
+  arrivedAt     DateTime?
+  openedByUserId String?
+  createdAt     DateTime        @default(now())
+
+  patient      Patient                    @relation(fields: [patientId], references: [id])
+  appointment  Appointment?               @relation(fields: [appointmentId], references: [id])
+  sessions     ClinicalSession[]
+  orders       Order[]
+  transitions  EncounterStatusTransition[]
+
+  @@index([receptionStatus, departmentId])
+  @@index([patientId])
+}
+
+model EncounterStatusTransition {
+  id          String          @id @default(cuid())
+  encounterId String
+  fromStatus  ReceptionStatus
+  toStatus    ReceptionStatus
+  byUserId    String?
+  manual      Boolean         @default(false)
+  createdAt   DateTime        @default(now())
+  encounter   Encounter       @relation(fields: [encounterId], references: [id])
+
+  @@index([encounterId, createdAt])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Clinical record (M04) — 別紙1 §3, 174項 16-18
+// ─────────────────────────────────────────────────────────────────────────────
+
+model ClinicalSession {
+  id           String   @id @default(cuid())
+  encounterId  String
+  recordedDate DateTime
+  departmentId String
+  createdByUserId String
+  createdAt    DateTime @default(now())
+
+  encounter Encounter       @relation(fields: [encounterId], references: [id])
+  notes     ClinicalNote[]
+  record    ClinicalRecord?
+
+  @@index([encounterId, recordedDate])
+}
+
+// 記載単位 = the smallest unit of version management.
+// APPEND-ONLY: db/triggers.sql blocks content UPDATE and all DELETE.
+// Amend = mark old row SUPERSEDED + INSERT new version (previousVersionId chain).
+model ClinicalNote {
+  id                String       @id @default(cuid())
+  sessionId         String
+  encounterId       String
+  patientId         String
+  noteType          NoteType     @default(PROGRESS)
+  recordedDate      DateTime
+  authorUserId      String
+  authorJobType     JobType
+  departmentId      String
+  wardId            String?
+  insuranceId       String?
+  isProxyInput      Boolean      @default(false)
+  proxyAuthorUserId String?
+  responsibleUserId String?
+  blocks            Json // [{kind:'S'|'O'|'A'|'P'|'FREE', spans:[{text,marks}]}]
+  version           Int          @default(1)
+  rootNoteId        String?
+  previousVersionId String?      @unique
+  supersededById    String?      @unique
+  isLatest          Boolean      @default(true)
+  status            RecordStatus @default(EDITING)
+  lockedAt          DateTime?
+  amendReason       String?
+  createdAt         DateTime     @default(now())
+
+  session         ClinicalSession @relation(fields: [sessionId], references: [id])
+  patient         Patient         @relation(fields: [patientId], references: [id])
+  previousVersion ClinicalNote?   @relation("NoteVersion", fields: [previousVersionId], references: [id])
+  nextVersion     ClinicalNote?   @relation("NoteVersion")
+  attachments     NoteAttachment[]
+  countersign     Countersign?
+
+  @@index([encounterId, recordedDate])
+  @@index([patientId, isLatest])
+  @@index([rootNoteId, version])
+}
+
+model NoteAttachment {
+  id           String  @id @default(cuid())
+  noteId       String
+  kind         String // SCHEMA | TEMPLATE | ORDER_REF | IMAGE | PDF | SCAN | LAB_LINK
+  refId        String?
+  caption      String?
+  displayScale Float   @default(1.0)
+  sortOrder    Int     @default(0)
+  note         ClinicalNote @relation(fields: [noteId], references: [id])
+
+  @@index([noteId])
+}
+
+// 研修医カウンターサイン — 別紙3 #60-61
+model Countersign {
+  id                String            @id @default(cuid())
+  noteId            String            @unique
+  superviseDoctorId String
+  status            CountersignStatus @default(UNAPPROVED)
+  approvedAt        DateTime?
+  approvedByUserId  String?
+  comment           String?
+  createdAt         DateTime          @default(now())
+  note              ClinicalNote      @relation(fields: [noteId], references: [id])
+
+  @@index([superviseDoctorId, status])
+}
+
+model Sticky {
+  id              String      @id @default(cuid())
+  patientId       String
+  encounterId     String?
+  title           String
+  body            String
+  color           String      @default("#fff7df")
+  scope           StickyScope @default(PRIVATE)
+  createdByUserId String
+  createdAt       DateTime    @default(now())
+
+  @@index([patientId])
+}
+
+// Session-level confirmed header / SOAP cache. Kept for 設計書 compatibility.
+model ClinicalRecord {
+  id               String    @id @default(cuid())
+  sessionId        String    @unique
+  status           String    @default("draft") // draft | approved | locked
+  s                String    @default("")
+  o                String    @default("")
+  a                String    @default("")
+  p                String    @default("")
+  icd10Codes       String[]  @default([])
+  approvedByUserId String?
+  approvedAt       DateTime?
+  createdAt        DateTime  @default(now())
+  session          ClinicalSession @relation(fields: [sessionId], references: [id])
+}
+
+model Template {
+  id           String        @id @default(cuid())
+  scope        TemplateScope @default(COMMON)
+  departmentId String?
+  ownerUserId  String?
+  category     String
+  name         String
+  layout       Json
+  version      Int           @default(1)
+  createdAt    DateTime      @default(now())
+
+  instances TemplateInstance[]
+}
+
+model TemplateInstance {
+  id         String   @id @default(cuid())
+  templateId String
+  noteId     String?
+  values     Json
+  createdAt  DateTime @default(now())
+  template   Template @relation(fields: [templateId], references: [id])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Orders & prescription (M04/M06/M07) — 別紙1 §5-6, 174項 57-101,126-133
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Common order base (Single Table + detail JSON). APPEND-ONLY content (triggers).
+model Order {
+  id                String      @id @default(cuid())
+  orderNo           String      @unique
+  patientId         String
+  encounterId       String
+  sessionId         String?
+  orderType         OrderType
+  classification    String?
+  departmentId      String
+  ordererUserId     String
+  responsibleUserId String?
+  status            OrderStatus @default(DRAFT)
+  isUrgent          Boolean     @default(false)
+  scheduledDate     DateTime?
+  detail            Json
+  doSourceOrderId   String?
+  setId             String?
+  version           Int         @default(1)
+  previousVersionId String?     @unique
+  supersededById    String?     @unique
+  isLatest          Boolean     @default(true)
+  consentDocId      String?
+  createdAt         DateTime    @default(now())
+
+  patient         Patient        @relation(fields: [patientId], references: [id])
+  encounter       Encounter      @relation(fields: [encounterId], references: [id])
+  previousVersion Order?         @relation("OrderVersion", fields: [previousVersionId], references: [id])
+  nextVersion     Order?         @relation("OrderVersion")
+  reception       OrderReception?
+  executions      OrderExecution[]
+  prescription    Prescription?
+
+  @@index([encounterId, orderType, scheduledDate])
+  @@index([status, departmentId])
+  @@index([patientId, isLatest])
+}
+
+model OrderReception {
+  id             String   @id @default(cuid())
+  orderId        String   @unique
+  receivedByUserId String
+  receivedAt     DateTime @default(now())
+  order          Order    @relation(fields: [orderId], references: [id])
+}
+
+model OrderExecution {
+  id              String    @id @default(cuid())
+  orderId         String
+  executedByUserId String
+  executedAt      DateTime  @default(now())
+  result          Json?
+  approvedByUserId String?
+  approvedAt      DateTime?
+  threePointAuth  Json? // 患者/薬剤/看護師 barcode verification
+  order           Order     @relation(fields: [orderId], references: [id])
+
+  @@index([orderId])
+}
+
+model Prescription {
+  id             String       @id @default(cuid())
+  orderId        String       @unique
+  patientId      String
+  encounterId    String
+  status         String       @default("proposed") // proposed|rule_checked|doctor_confirmed|dispensed
+  dispenseType   DispenseType @default(IN_HOUSE)
+  issuedByUserId String
+  issuedAt       DateTime?
+  createdAt      DateTime     @default(now())
+
+  order      Order               @relation(fields: [orderId], references: [id])
+  items      PrescriptionItem[]
+  checks     RuleCheckResult[]
+  overrides  PrescriptionOverride[]
+}
+
+model PrescriptionItem {
+  id             String  @id @default(cuid())
+  prescriptionId String
+  drugProductId  String
+  dosePerTime    Float
+  doseUnit       String
+  timesPerDay    Float
+  days           Int
+  route          String
+  usageCode      String?
+  comment        String?
+  prescription   Prescription @relation(fields: [prescriptionId], references: [id])
+  drug           DrugProduct  @relation(fields: [drugProductId], references: [id])
+
+  @@index([prescriptionId])
+}
+
+// 4大+拡張チェック結果 (1:N). checkedBy can never be AI (enum has no AI member).
+model RuleCheckResult {
+  id             String        @id @default(cuid())
+  prescriptionId String
+  orderId        String?
+  checkType      RuleCheckType
+  result         RuleResult
+  checkedBy      RuleCheckedBy @default(STATIC_DB)
+  severityNote   String?
+  details        Json // matched drug, patient condition, source citation, master version
+  masterVersion  String?
+  createdAt      DateTime      @default(now())
+  prescription   Prescription  @relation(fields: [prescriptionId], references: [id])
+
+  @@index([prescriptionId])
+}
+
+model PrescriptionOverride {
+  id                String   @id @default(cuid())
+  prescriptionId    String
+  ruleCheckResultId String
+  overriddenByUserId String
+  reason            String
+  countersignByUserId String?
+  createdAt         DateTime @default(now())
+  prescription      Prescription @relation(fields: [prescriptionId], references: [id])
+
+  @@index([prescriptionId])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Drug master (M06/M07) — code system (full auto import) + safety (provenance-strict)
+// ─────────────────────────────────────────────────────────────────────────────
+
+model DrugProduct {
+  id              String   @id @default(cuid())
+  receiptCode     String   @unique // レセプト電算 医薬品コード
+  yjCode          String?
+  hotCode         String?
+  gs1Code         String?
+  gtinUnit        String?
+  brandName       String
+  brandNameKana   String?
+  genericName     String?
+  strengthValue   Float?
+  strengthUnit    String?
+  dosageForm      String
+  administrationRoute String // 内服 | 外用 | 注射 | その他
+  unitCode        String?
+  nhiPrice        Float?
+  nhiPriceDate    DateTime?
+  isGeneric       Boolean  @default(false)
+  isNarcotic      Boolean  @default(false)
+  isPsychotropic  Boolean  @default(false)
+  isPoison        Boolean  @default(false)
+  isPowerfulDrug  Boolean  @default(false)
+  isBiological    Boolean  @default(false)
+  atcCode         String?
+  marketingStatus String   @default("ON_MARKET")
+  sourceMasterVersion String
+  provenance      Json // {source, sourceFile, importedAt, masterVersion}
+  createdAt       DateTime @default(now())
+
+  ingredients DrugProductIngredient[]
+  rxItems     PrescriptionItem[]
+
+  @@index([yjCode])
+  @@index([hotCode])
+  @@index([atcCode])
+}
+
+model DrugIngredient {
+  id               String  @id @default(cuid())
+  ingredientCode   String  @unique
+  ingredientName   String
+  ingredientNameKana String?
+  ingredientNameEn String?
+  keggDrugId       String? // reference only — never used for judgement
+  saltVariantOfId  String?
+  saltVariantOf    DrugIngredient?  @relation("SaltVariant", fields: [saltVariantOfId], references: [id])
+  saltVariants     DrugIngredient[] @relation("SaltVariant")
+  products         DrugProductIngredient[]
+}
+
+model DrugProductIngredient {
+  id            String  @id @default(cuid())
+  drugProductId String
+  ingredientId  String
+  amountValue   Float?
+  amountUnit    String?
+  isActive      Boolean @default(true)
+  product       DrugProduct    @relation(fields: [drugProductId], references: [id])
+  ingredient    DrugIngredient @relation(fields: [ingredientId], references: [id])
+
+  @@unique([drugProductId, ingredientId])
+}
+
+model DrugCodeCrosswalk {
+  id             String  @id @default(cuid())
+  receiptCode    String
+  hotCode        String?
+  yjCode         String?
+  ingredientCode String?
+  matchMethod    String // exact | medis_table | manual
+  confidence     String // high | medium | low
+  verifiedByUserId String?
+  provenance     Json
+
+  @@index([receiptCode])
+}
+
+// ── Safety tables: provenance NOT NULL, source ∈ DrugDataSource (NO AI member) ──
+
+model DrugIndication {
+  id                  String         @id @default(cuid())
+  targetKind          DrugTargetKind
+  targetId            String
+  indicationText      String
+  icd10Codes          String[]       @default([])
+  isInsuranceApplicable Boolean      @default(true)
+  conditionNote       String?
+  source              DrugDataSource
+  sourceCitation      String
+  validFrom           DateTime       @default(now())
+  validTo             DateTime?
+  reviewedByUserId    String?
+  reviewedAt          DateTime?
+  isSeed              Boolean        @default(false)
+  isProvisional       Boolean        @default(false)
+  createdAt           DateTime       @default(now())
+
+  @@index([targetKind, targetId])
+}
+
+model DrugDosage {
+  id               String           @id @default(cuid())
+  targetKind       DrugTargetKind
+  targetId         String
+  population       DosagePopulation @default(ADULT)
+  route            String
+  usualDoseSingle  Float?
+  usualDoseDaily   Float?
+  maxDoseSingle    Float?
+  maxDoseDaily     Float?
+  maxDosePeriod    Float?
+  periodUnit       String?
+  weightBased      Boolean          @default(false)
+  dosePerKgSingle  Float?
+  dosePerKgDaily   Float?
+  ageMinDays       Int?
+  ageMaxDays       Int?
+  renalAdjustment  Json?
+  hepaticAdjustment Json?
+  dosageText       String?
+  source           DrugDataSource
+  sourceCitation   String
+  validFrom        DateTime         @default(now())
+  validTo          DateTime?
+  reviewedByUserId String?
+  reviewedAt       DateTime?
+  isSeed           Boolean          @default(false)
+  isProvisional    Boolean          @default(false)
+  createdAt        DateTime         @default(now())
+
+  @@index([targetKind, targetId])
+}
+
+model DrugContraindication {
+  id               String              @id @default(cuid())
+  targetKind       DrugTargetKind
+  targetId         String
+  severity         ContraSeverity
+  conditionType    ContraConditionType
+  icd10Codes       String[]            @default([])
+  ageMinDays       Int?
+  ageMaxDays       Int?
+  targetDrugOrClass Json?
+  conditionText    String
+  rationale        String?
+  source           DrugDataSource
+  sourceCitation   String
+  validFrom        DateTime            @default(now())
+  validTo          DateTime?
+  reviewedByUserId String?
+  reviewedAt       DateTime?
+  isSeed           Boolean             @default(false)
+  isProvisional    Boolean             @default(false)
+  createdAt        DateTime            @default(now())
+
+  @@index([targetKind, targetId])
+}
+
+model DrugInteraction {
+  id              String                 @id @default(cuid())
+  subjectKind     DrugTargetKind
+  subjectId       String
+  counterpartType InteractionCounterpart
+  counterpartRef  Json
+  severity        InteractionSeverity
+  mechanism       String?
+  clinicalEffect  String?
+  management      String?
+  source          DrugDataSource
+  sourceCitation  String
+  validFrom       DateTime               @default(now())
+  validTo         DateTime?
+  reviewedByUserId String?
+  reviewedAt      DateTime?
+  isSeed          Boolean                @default(false)
+  isProvisional   Boolean                @default(false)
+  createdAt       DateTime               @default(now())
+
+  @@index([subjectKind, subjectId])
+}
+
+// Append-only safety-data review trail (真正性).
+model DrugSafetyReviewLog {
+  id               String   @id @default(cuid())
+  entityTable      String
+  entityId         String
+  action           String // create | supersede | retire
+  before           Json?
+  after            Json?
+  reviewedByUserId String?
+  reason           String?
+  sourceCitation   String?
+  createdAt        DateTime @default(now())
+
+  @@index([entityTable, entityId])
+}
+
+// ── Other masters ──
+
+model ExamMaster {
+  id           String  @id @default(cuid())
+  code         String  @unique
+  name         String
+  jlac10       String?
+  category     String
+  specimenType String?
+  refLow       Float?
+  refHigh      Float?
+  unit         String?
+  sourceMasterVersion String
+  provenance   Json
+}
+
+model DiseaseMaster {
+  id            String   @id @default(cuid())
+  code          String   @unique // MEDIS標準病名コード
+  name          String
+  icd10         String[] @default([])
+  isConfidential Boolean @default(false)
+  source        DrugDataSource
+  sourceMasterVersion String
+}
+
+model MasterVersion {
+  id            String     @id @default(cuid())
+  masterType    MasterType
+  source        String
+  sourceRelease String
+  validFrom     DateTime
+  validTo       DateTime?
+  importedAt    DateTime   @default(now())
+  checksum      String?
+
+  @@index([masterType, validFrom])
+}
+
+model ImportRun {
+  id        String       @id @default(cuid())
+  source    String
+  startedAt DateTime     @default(now())
+  endedAt   DateTime?
+  counts    Json?
+  checksum  String?
+  status    ImportStatus @default(RUNNING)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 病名・転帰 / 紹介状 / 文書 / 退院サマリ (M04/M12) — 174項 19-22,117,166-168
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum DiagnosisStatus {
+  ACTIVE
+  RESOLVED
+  DELETED
+}
+
+enum DiseaseOutcome {
+  CURED
+  IMPROVED
+  UNCHANGED
+  TRANSFERRED
+  DECEASED
+  STOPPED
+}
+
+model PatientDiagnosis {
+  id           String          @id @default(cuid())
+  patientId    String
+  encounterId  String?
+  masterCode   String?
+  displayName  String
+  icd10        String?
+  departmentId String?
+  isMain       Boolean         @default(false)
+  isSuspected  Boolean         @default(false)
+  acuteChronic String? // ACUTE | CHRONIC
+  startDate    DateTime        @default(now())
+  outcome      DiseaseOutcome?
+  outcomeDate  DateTime?
+  forBilling   Boolean         @default(true)
+  status       DiagnosisStatus @default(ACTIVE)
+  recordedByUserId String
+  createdAt    DateTime        @default(now())
+
+  patient Patient @relation(fields: [patientId], references: [id])
+
+  @@index([patientId, status])
+}
+
+enum ReferralDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum ReferralStatus {
+  DRAFT
+  PRINTED
+  SENT
+  AWAITING_REPLY
+  REPLY_RECEIVED
+  CLOSED
+}
+
+model Referral {
+  id              String            @id @default(cuid())
+  patientId       String?
+  direction       ReferralDirection @default(OUTBOUND)
+  partnerFacility String
+  partnerDoctor   String?
+  internalDeptId  String?
+  internalUserId  String?
+  purpose         String
+  chiefComplaint  String?
+  diseaseState    String?
+  status          ReferralStatus    @default(DRAFT)
+  desiredVisitOn  DateTime?
+  replyText       String?
+  createdByUserId String
+  createdAt       DateTime          @default(now())
+
+  patient Patient? @relation(fields: [patientId], references: [id])
+
+  @@index([patientId])
+  @@index([status])
+}
+
+model ClinicalDocument {
+  id          String   @id @default(cuid())
+  patientId   String?
+  encounterId String?
+  docType     String // 紹介状|同意書|説明書|退院サマリ|スキャン|院内文書
+  templateId  String?
+  title       String
+  format      String   @default("TEXT") // TEXT|WORD|PDF|SCAN_IMAGE
+  body        String?
+  storageUrl  String?
+  scannedPages Int?
+  ocrText     String?
+  version     Int      @default(1)
+  createdByUserId String
+  createdAt   DateTime @default(now())
+
+  @@index([patientId, docType])
+}
+
+enum SummaryStatus {
+  DRAFT
+  COMPLETED
+}
+
+model DischargeSummary {
+  id              String        @id @default(cuid())
+  patientId       String
+  admissionRef    String?
+  status          SummaryStatus @default(DRAFT)
+  approvalStatus  String        @default("UNAPPROVED") // UNAPPROVED|APPROVED
+  authorUserId    String
+  approverUserId  String?
+  approvedAt      DateTime?
+  admissionCourse String?
+  presentIllness  String?
+  hospitalCourse  String?
+  dischargePlan   String?
+  version         Int           @default(1)
+  createdAt       DateTime      @default(now())
+
+  @@index([patientId])
+}

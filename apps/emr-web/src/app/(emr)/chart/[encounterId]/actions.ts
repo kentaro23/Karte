@@ -1,0 +1,264 @@
+'use server';
+import { revalidatePath } from 'next/cache';
+import { prisma, type JobType } from '@medixus/db';
+import { writeAudit } from '@medixus/audit';
+import { planAmendment, formatOrderNo, type SoapBlock } from '@medixus/domain';
+import { runPrescriptionChecks } from '@medixus/order-checks';
+import { requireSession } from '@/lib/session';
+
+async function sessionForEncounter(encounterId: string, userId: string) {
+  const enc = await prisma.encounter.findUniqueOrThrow({ where: { id: encounterId } });
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  const existing = await prisma.clinicalSession.findFirst({
+    where: { encounterId, recordedDate: { gte: start } },
+    orderBy: { createdAt: 'desc' },
+  });
+  if (existing) return { enc, session: existing };
+  const session = await prisma.clinicalSession.create({
+    data: {
+      encounterId,
+      recordedDate: new Date(),
+      departmentId: enc.departmentId,
+      createdByUserId: userId,
+    },
+  });
+  return { enc, session };
+}
+
+export async function saveSoap(encounterId: string, blocks: SoapBlock[]) {
+  const s = await requireSession();
+  const { enc, session } = await sessionForEncounter(encounterId, s.userId);
+  const note = await prisma.clinicalNote.create({
+    data: {
+      sessionId: session.id,
+      encounterId,
+      patientId: enc.patientId,
+      noteType: 'PROGRESS',
+      recordedDate: new Date(),
+      authorUserId: s.userId,
+      authorJobType: s.jobType as JobType,
+      departmentId: enc.departmentId,
+      blocks: blocks as object,
+      status: 'SAVED',
+    },
+  });
+  const find = (k: string) =>
+    blocks.find((b) => b.kind === k)?.spans.map((x) => x.text).join('') ?? '';
+  await prisma.clinicalRecord.upsert({
+    where: { sessionId: session.id },
+    create: {
+      sessionId: session.id,
+      status: 'draft',
+      s: find('S'),
+      o: find('O'),
+      a: find('A'),
+      p: find('P'),
+    },
+    update: { s: find('S'), o: find('O'), a: find('A'), p: find('P') },
+  });
+  if (enc.receptionStatus === 'READY' || enc.receptionStatus === 'ARRIVED') {
+    await prisma.encounter.update({
+      where: { id: encounterId },
+      data: { receptionStatus: 'IN_CONSULTATION' },
+    });
+  }
+  await writeAudit({
+    actorUserId: s.userId,
+    patientId: enc.patientId,
+    action: 'CHART_WRITE',
+    resource: 'ClinicalNote',
+    resourceId: note.id,
+  });
+  revalidatePath(`/chart/${encounterId}`);
+  return { ok: true, noteId: note.id };
+}
+
+export async function lockNote(encounterId: string, noteId: string) {
+  const s = await requireSession();
+  await prisma.clinicalNote.update({
+    where: { id: noteId },
+    data: { status: 'LOCKED', lockedAt: new Date() },
+  });
+  await writeAudit({
+    actorUserId: s.userId,
+    action: 'CHART_WRITE',
+    resource: 'ClinicalNote.lock',
+    resourceId: noteId,
+  });
+  revalidatePath(`/chart/${encounterId}`);
+  return { ok: true };
+}
+
+/** 改版: append a new version, supersede the old one (electronic-preservation真正性). */
+export async function amendNote(encounterId: string, noteId: string, blocks: SoapBlock[], reason: string) {
+  const s = await requireSession();
+  const cur = await prisma.clinicalNote.findUniqueOrThrow({ where: { id: noteId } });
+  const plan = planAmendment({
+    id: cur.id,
+    version: cur.version,
+    rootNoteId: cur.rootNoteId,
+    status: cur.status,
+    lockedAt: cur.lockedAt,
+  });
+  const created = await prisma.clinicalNote.create({
+    data: {
+      sessionId: cur.sessionId,
+      encounterId: cur.encounterId,
+      patientId: cur.patientId,
+      noteType: cur.noteType,
+      recordedDate: new Date(),
+      authorUserId: s.userId,
+      authorJobType: s.jobType as JobType,
+      departmentId: cur.departmentId,
+      blocks: blocks as object,
+      version: plan.next.version,
+      rootNoteId: plan.next.rootNoteId,
+      previousVersionId: cur.id,
+      isLatest: true,
+      status: 'SAVED',
+      amendReason: reason,
+    },
+  });
+  await prisma.clinicalNote.update({
+    where: { id: cur.id },
+    data: { isLatest: false, status: 'SUPERSEDED', supersededById: created.id },
+  });
+  await writeAudit({
+    actorUserId: s.userId,
+    patientId: cur.patientId,
+    action: 'CHART_AMEND',
+    resource: 'ClinicalNote',
+    resourceId: created.id,
+    detail: { from: cur.id, version: created.version, reason },
+  });
+  revalidatePath(`/chart/${encounterId}`);
+  return { ok: true, noteId: created.id };
+}
+
+export interface RxItemInput {
+  drugProductId: string;
+  drugName: string;
+  dosePerTime: number;
+  doseUnit: string;
+  timesPerDay: number;
+  days: number;
+  route: string;
+}
+
+export async function addPrescription(encounterId: string, items: RxItemInput[]) {
+  const s = await requireSession();
+  const enc = await prisma.encounter.findUniqueOrThrow({ where: { id: encounterId } });
+  const dayStart = new Date();
+  dayStart.setHours(0, 0, 0, 0);
+  const seq = (await prisma.order.count({ where: { createdAt: { gte: dayStart } } })) + 1;
+  const order = await prisma.order.create({
+    data: {
+      orderNo: formatOrderNo(new Date(), seq),
+      patientId: enc.patientId,
+      encounterId,
+      orderType: 'RX',
+      classification: 'OUTPATIENT_IN_HOUSE',
+      departmentId: enc.departmentId,
+      ordererUserId: s.userId,
+      status: 'DRAFT',
+      detail: { items } as object,
+    },
+  });
+  const rx = await prisma.prescription.create({
+    data: {
+      orderId: order.id,
+      patientId: enc.patientId,
+      encounterId,
+      status: 'proposed',
+      dispenseType: 'IN_HOUSE',
+      issuedByUserId: s.userId,
+      items: {
+        create: items.map((i) => ({
+          drugProductId: i.drugProductId,
+          dosePerTime: i.dosePerTime,
+          doseUnit: i.doseUnit,
+          timesPerDay: i.timesPerDay,
+          days: i.days,
+          route: i.route,
+        })),
+      },
+    },
+  });
+  await writeAudit({
+    actorUserId: s.userId,
+    patientId: enc.patientId,
+    action: 'ORDER_ISSUE',
+    resource: 'Prescription',
+    resourceId: rx.id,
+  });
+  const summary = await runPrescriptionChecks(rx.id);
+  await writeAudit({
+    actorUserId: s.userId,
+    patientId: enc.patientId,
+    action: 'ORDER_CHECK',
+    resource: 'Prescription',
+    resourceId: rx.id,
+    result: summary.overall,
+    detail: { findings: summary.findings.length },
+  });
+  revalidatePath(`/chart/${encounterId}`);
+  return { prescriptionId: rx.id, ...summary };
+}
+
+export async function confirmPrescription(
+  encounterId: string,
+  prescriptionId: string,
+  overrides: { ruleCheckResultId: string; reason: string }[],
+) {
+  const s = await requireSession();
+  const checks = await prisma.ruleCheckResult.findMany({ where: { prescriptionId } });
+  const latestRun = checks
+    .map((c) => (c.details as { runId?: string })?.runId ?? '')
+    .sort()
+    .at(-1);
+  const blocked = checks.filter(
+    (c) => c.result === 'BLOCKED' && ((c.details as { runId?: string })?.runId ?? '') === latestRun,
+  );
+  const overriddenIds = new Set(overrides.map((o) => o.ruleCheckResultId));
+  const missing = blocked.filter((b) => !overriddenIds.has(b.id));
+  if (missing.length > 0) {
+    return {
+      ok: false,
+      error: `禁忌・極量超過等のブロック ${missing.length} 件が未解決です。理由を入力して解除してください。`,
+    };
+  }
+  for (const o of overrides) {
+    if (!o.reason || o.reason.trim().length < 3) {
+      return { ok: false, error: 'オーバーライド理由は必須です（3文字以上）' };
+    }
+    await prisma.prescriptionOverride.create({
+      data: {
+        prescriptionId,
+        ruleCheckResultId: o.ruleCheckResultId,
+        overriddenByUserId: s.userId,
+        reason: o.reason,
+      },
+    });
+    await writeAudit({
+      actorUserId: s.userId,
+      action: 'PRESCRIPTION_OVERRIDE',
+      resource: 'RuleCheckResult',
+      resourceId: o.ruleCheckResultId,
+      detail: { reason: o.reason },
+    });
+  }
+  const rx = await prisma.prescription.update({
+    where: { id: prescriptionId },
+    data: { status: 'doctor_confirmed', issuedAt: new Date() },
+  });
+  await prisma.order.update({ where: { id: rx.orderId }, data: { status: 'REQUESTED' } });
+  await writeAudit({
+    actorUserId: s.userId,
+    action: 'ORDER_ISSUE',
+    resource: 'Prescription.confirm',
+    resourceId: prescriptionId,
+  });
+  revalidatePath(`/chart/${encounterId}`);
+  return { ok: true };
+}

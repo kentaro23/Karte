@@ -1,0 +1,18 @@
+node_modules/
+.next/
+dist/
+out/
+.turbo/
+*.tsbuildinfo
+
+# project-local postgres cluster (self-contained, never commit data)
+.pgdata/
+*.log
+
+# env
+.env
+.env.local
+.env.*.local
+
+# os
+.DS_Store

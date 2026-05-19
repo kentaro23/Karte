@@ -1,0 +1,22 @@
+{
+  "name": "@medixus/seed",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "seed": "tsx seed.ts",
+    "verify": "tsx verify.ts"
+  },
+  "dependencies": {
+    "@medixus/db": "workspace:*",
+    "@medixus/auth": "workspace:*",
+    "@medixus/authz": "workspace:*",
+    "@medixus/audit": "workspace:*",
+    "@medixus/master-import": "workspace:*",
+    "@medixus/order-checks": "workspace:*"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.1",
+    "typescript": "^5.6.2",
+    "@types/node": "^22.5.0"
+  }
+}

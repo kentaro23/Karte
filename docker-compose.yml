@@ -1,0 +1,23 @@
+# Alternative to scripts/pg.sh — run Postgres in Docker (any OS).
+#   docker compose up -d db
+# Keeps the same DATABASE_URL (127.0.0.1:54329 / db medixus_karte / trust auth).
+services:
+  db:
+    image: postgres:16
+    container_name: medixus-karte-db
+    environment:
+      POSTGRES_DB: medixus_karte
+      POSTGRES_USER: postgres
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "127.0.0.1:54329:5432"
+    volumes:
+      - medixus_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d medixus_karte"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  medixus_pgdata:
