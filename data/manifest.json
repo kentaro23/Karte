@@ -1,0 +1,33 @@
+{
+  "format": "medixus-drug-bundle",
+  "version": 1,
+  "generatedAt": "2026-05-19T07:43:12.203Z",
+  "source": "curated+common (current DB export)",
+  "note": "公式レセ電 医薬品マスター / PMDA電子添文 / 商用DB を取込後に再exportすれば全件版になる",
+  "files": [
+    {
+      "name": "drug_ingredient.csv",
+      "rows": 140
+    },
+    {
+      "name": "drug_product.csv",
+      "rows": 150
+    },
+    {
+      "name": "drug_indication.csv",
+      "rows": 101
+    },
+    {
+      "name": "drug_contraindication.csv",
+      "rows": 2
+    },
+    {
+      "name": "drug_interaction.csv",
+      "rows": 3
+    },
+    {
+      "name": "drug_dosage.csv",
+      "rows": 3
+    }
+  ]
+}

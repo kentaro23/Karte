@@ -1,0 +1,4 @@
+subjectType,subjectCode,counterpartType,counterpartRef,severity,mechanism,clinicalEffect,management,source,sourceCitation,isSeed,isProvisional,reviewedBy
+INGREDIENT,ING_WARFARIN,DRUG_INGREDIENT,"{""ingredientCodes"":[""ING_LOXOPROFEN"",""ING_ASPIRIN""]}",CAUTION_COMBO,血小板凝集抑制・抗凝血作用増強,出血傾向の増強,PT-INRをモニタし減量を考慮,CURATED_SEED,PMDA 医療用医薬品 添付文書（ワーファリン）標準的記載 — 暫定seed,true,true,cmpbzb6zd000gnbqux6b9nawc
+INGREDIENT,ING_WARFARIN,FOOD,"{""food"":""納豆・クロレラ・青汁（ビタミンK含有食品）""}",CAUTION_COMBO,ビタミンK摂取,抗凝血作用の減弱,当該食品の摂取を避ける,CURATED_SEED,PMDA 医療用医薬品 添付文書（ワーファリン）標準的記載 — 暫定seed,true,true,cmpbzb6zd000gnbqux6b9nawc
+INGREDIENT,ING_METFORMIN,FOOD,"{""food"":""過度のアルコール摂取""}",CAUTION_COMBO,肝での乳酸代謝障害,乳酸アシドーシスのリスク,過度の飲酒を避ける,CURATED_SEED,PMDA 医療用医薬品 添付文書（メトグルコ）標準的記載 — 暫定seed,true,true,cmpbzb6zd000gnbqux6b9nawc

@@ -1,0 +1,4 @@
+targetType,targetCode,population,route,usualDoseDaily,maxDoseSingle,maxDoseDaily,dosageText,source,sourceCitation,isSeed,isProvisional,reviewedBy
+INGREDIENT,ING_ACETAMINOPHEN,ADULT,内服,1500,1000,4000,1回300〜1000mg、投与間隔4〜6時間以上、1日総量4000mgを限度,CURATED_SEED,PMDA 医療用医薬品 添付文書（カロナール）標準的記載 — 暫定seed,true,true,cmpbzb6zd000gnbqux6b9nawc
+INGREDIENT,ING_LOXOPROFEN,ADULT,内服,180,60,180,1回60mg 1日3回（頓用は1回60〜120mg）,CURATED_SEED,PMDA 医療用医薬品 添付文書（ロキソニン）標準的記載 — 暫定seed,true,true,cmpbzb6zd000gnbqux6b9nawc
+INGREDIENT,ING_AMLODIPINE,ADULT,内服,5,10,10,1日1回2.5〜5mg、効果不十分時1日1回10mgまで,CURATED_SEED,PMDA 医療用医薬品 添付文書（アムロジン）標準的記載 — 暫定seed,true,true,cmpbzb6zd000gnbqux6b9nawc

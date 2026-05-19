@@ -21,6 +21,8 @@
     "seed": "pnpm --filter @medixus/seed seed",
     "verify": "pnpm --filter @medixus/seed verify",
     "import:drugs": "bash scripts/import-drugs.sh",
+    "export:drugs:bundle": "pnpm --filter @medixus/seed exec tsx export-bundle.ts",
+    "import:drugs:bundle": "pnpm --filter @medixus/seed exec tsx import-bundle.ts",
     "pg:init": "bash scripts/pg.sh init",
     "pg:start": "bash scripts/pg.sh start",
     "pg:stop": "bash scripts/pg.sh stop",
