@@ -1,7 +1,7 @@
 {
   "format": "medixus-drug-bundle",
   "version": 1,
-  "generatedAt": "2026-05-19T07:43:12.203Z",
+  "generatedAt": "2026-05-19T07:52:08.524Z",
   "source": "curated+common (current DB export)",
   "note": "公式レセ電 医薬品マスター / PMDA電子添文 / 商用DB を取込後に再exportすれば全件版になる",
   "files": [
@@ -11,7 +11,7 @@
     },
     {
       "name": "drug_product.csv",
-      "rows": 150
+      "rows": 19485
     },
     {
       "name": "drug_indication.csv",

@@ -1,3 +1,3 @@
 targetType,targetCode,severity,conditionType,conditionText,icd10,ageMinDays,ageMaxDays,rationale,source,sourceCitation,isSeed,isProvisional,reviewedBy
-INGREDIENT,ING_WARFARIN,ABSOLUTE,PREGNANCY,妊婦又は妊娠している可能性のある女性：催奇形性及び胎児・新生児の出血,,,,胎盤通過・催奇形性,CURATED_SEED,PMDA 医療用医薬品 添付文書（ワーファリン）標準的記載 — 暫定seed,true,true,cmpbzb6zd000gnbqux6b9nawc
-INGREDIENT,ING_ASPIRIN,RELATIVE,AGE,小児（特に水痘・インフルエンザ）：ライ症候群,,,5475,ライ症候群との関連,CURATED_SEED,PMDA 医療用医薬品 添付文書（バイアスピリン）標準的記載 — 暫定seed,true,true,cmpbzb6zd000gnbqux6b9nawc
+INGREDIENT,ING_WARFARIN,ABSOLUTE,PREGNANCY,妊婦又は妊娠している可能性のある女性：催奇形性及び胎児・新生児の出血,,,,胎盤通過・催奇形性,CURATED_SEED,PMDA 医療用医薬品 添付文書（ワーファリン）標準的記載 — 暫定seed,true,true,cmpcbue85000gmkwsnom2p96i
+INGREDIENT,ING_ASPIRIN,RELATIVE,AGE,小児（特に水痘・インフルエンザ）：ライ症候群,,,5475,ライ症候群との関連,CURATED_SEED,PMDA 医療用医薬品 添付文書（バイアスピリン）標準的記載 — 暫定seed,true,true,cmpcbue85000gmkwsnom2p96i

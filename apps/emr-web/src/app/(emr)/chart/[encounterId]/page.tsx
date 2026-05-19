@@ -32,7 +32,7 @@ export default async function ChartPage({
 
   const drugs = await prisma.drugProduct.findMany({
     orderBy: { brandName: 'asc' },
-    take: 5000,
+    take: 30000,
     select: {
       id: true,
       brandName: true,
