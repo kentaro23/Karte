@@ -663,6 +663,10 @@ function RxPanel({
   const [dose, setDose] = React.useState(1);
   const [tpd, setTpd] = React.useState(3);
   const [days, setDays] = React.useState(7);
+  const [usage, setUsage] = React.useState('毎食後');
+  const [dispense, setDispense] = React.useState<'IN_HOUSE' | 'OUT_OF_HOUSE'>('IN_HOUSE');
+  const [oneDose, setOneDose] = React.useState(false);
+  const [genericOk, setGenericOk] = React.useState(true);
   const [pending, start] = React.useTransition();
   const [result, setResult] = React.useState<null | {
     prescriptionId: string;
@@ -686,6 +690,7 @@ function RxPanel({
         timesPerDay: tpd,
         days,
         route: d.administrationRoute,
+        usage,
       },
     ]);
   };
@@ -739,18 +744,81 @@ function RxPanel({
       <div className="mb-1.5 text-2xs text-muted">
         選択中: <span className="font-semibold text-ink">{selected?.brandName ?? '—'}</span>
       </div>
-      <div className="mb-1.5 flex gap-1">
-        <input type="number" value={dose} step={0.5} onChange={(e) => setDose(+e.target.value)} className="w-12 rounded border border-line px-1 py-1" title="1回量" />
-        <input type="number" value={tpd} onChange={(e) => setTpd(+e.target.value)} className="w-12 rounded border border-line px-1 py-1" title="1日回数" />
-        <input type="number" value={days} onChange={(e) => setDays(+e.target.value)} className="w-12 rounded border border-line px-1 py-1" title="日数" />
-        <Button size="sm" variant="secondary" onClick={add}>
-          追加
+      <select
+        value={usage}
+        onChange={(e) => setUsage(e.target.value)}
+        className="mb-1 w-full rounded border border-line px-1.5 py-1 text-xs"
+        title="用法"
+      >
+        {['毎食後', '毎食前', '朝食後', '夕食後', '就寝前', '8時間毎', '頓用', '外用', '隔日'].map(
+          (u) => (
+            <option key={u} value={u}>
+              {u}
+            </option>
+          ),
+        )}
+      </select>
+      <div className="mb-1 flex items-center gap-1">
+        <label className="flex items-center gap-0.5">
+          <span className="text-2xs text-muted">1回</span>
+          <input type="number" value={dose} step={0.5} min={0} onChange={(e) => setDose(+e.target.value)} className="w-11 rounded border border-line px-1 py-1" />
+        </label>
+        <label className="flex items-center gap-0.5">
+          <span className="text-2xs text-muted">×</span>
+          <input type="number" value={tpd} min={1} onChange={(e) => setTpd(+e.target.value)} className="w-10 rounded border border-line px-1 py-1" />
+        </label>
+        <label className="flex items-center gap-0.5">
+          <input type="number" value={days} min={1} onChange={(e) => setDays(+e.target.value)} className="w-12 rounded border border-line px-1 py-1" />
+          <span className="text-2xs text-muted">日</span>
+        </label>
+        <span className="ml-auto text-2xs text-muted">
+          1日量 <b>{(dose * tpd).toFixed(dose % 1 ? 1 : 0)}</b>
+        </span>
+      </div>
+      <div className="mb-1 flex flex-wrap gap-1">
+        {[7, 14, 28, 30, 90].map((dd) => (
+          <button
+            key={dd}
+            onClick={() => setDays(dd)}
+            className={`rounded border px-1.5 py-0.5 text-2xs ${days === dd ? 'border-accent-500 bg-accent-50 text-accent-700' : 'border-line'}`}
+          >
+            {dd}日
+          </button>
+        ))}
+        <Button size="sm" variant="secondary" onClick={add} className="ml-auto">
+          ＋追加
         </Button>
+      </div>
+      <div className="mb-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-2xs">
+        <span className="inline-flex overflow-hidden rounded border border-line">
+          {(['IN_HOUSE', 'OUT_OF_HOUSE'] as const).map((dt) => (
+            <button
+              key={dt}
+              onClick={() => setDispense(dt)}
+              className={`px-2 py-0.5 ${dispense === dt ? 'bg-accent-500 text-white' : 'bg-white'}`}
+            >
+              {dt === 'IN_HOUSE' ? '院内' : '院外'}
+            </button>
+          ))}
+        </span>
+        <label className="flex items-center gap-1">
+          <input type="checkbox" checked={oneDose} onChange={(e) => setOneDose(e.target.checked)} />
+          一包化
+        </label>
+        <label className="flex items-center gap-1">
+          <input
+            type="checkbox"
+            checked={genericOk}
+            onChange={(e) => setGenericOk(e.target.checked)}
+          />
+          後発変更可
+        </label>
       </div>
       {cart.map((c, i) => (
         <div key={i} className="flex items-center justify-between py-0.5">
           <span>
             {c.drugName} {c.dosePerTime}×{c.timesPerDay}×{c.days}日
+            {c.usage ? ` ・${c.usage}` : ''}
           </span>
           <button onClick={() => setCart((x) => x.filter((_, j) => j !== i))} className="text-alert">
             ×
@@ -764,7 +832,11 @@ function RxPanel({
         disabled={pending || cart.length === 0}
         onClick={() =>
           start(async () => {
-            const r = await addPrescription(encounterId, cart);
+            const r = await addPrescription(encounterId, cart, {
+              dispenseType: dispense,
+              oneDose,
+              genericOk,
+            });
             setResult(r);
             setConfirmMsg(null);
           })

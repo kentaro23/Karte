@@ -144,25 +144,42 @@ export interface RxItemInput {
   timesPerDay: number;
   days: number;
   route: string;
+  usage?: string;
 }
 
-export async function addPrescription(encounterId: string, items: RxItemInput[]) {
+export interface RxOptions {
+  dispenseType?: 'IN_HOUSE' | 'OUT_OF_HOUSE';
+  oneDose?: boolean; // 一包化
+  genericOk?: boolean; // 後発医薬品への変更可
+}
+
+export async function addPrescription(
+  encounterId: string,
+  items: RxItemInput[],
+  opts: RxOptions = {},
+) {
   const s = await requireSession();
   const enc = await prisma.encounter.findUniqueOrThrow({ where: { id: encounterId } });
   const dayStart = new Date();
   dayStart.setHours(0, 0, 0, 0);
   const seq = (await prisma.order.count({ where: { createdAt: { gte: dayStart } } })) + 1;
+  const dispenseType = opts.dispenseType ?? 'IN_HOUSE';
   const order = await prisma.order.create({
     data: {
       orderNo: formatOrderNo(new Date(), seq),
       patientId: enc.patientId,
       encounterId,
       orderType: 'RX',
-      classification: 'OUTPATIENT_IN_HOUSE',
+      classification: dispenseType === 'OUT_OF_HOUSE' ? 'OUTPATIENT_OUT' : 'OUTPATIENT_IN_HOUSE',
       departmentId: enc.departmentId,
       ordererUserId: s.userId,
       status: 'DRAFT',
-      detail: { items } as object,
+      detail: {
+        items,
+        oneDose: opts.oneDose ?? false,
+        genericOk: opts.genericOk ?? false,
+        dispenseType,
+      } as object,
     },
   });
   const rx = await prisma.prescription.create({
@@ -171,7 +188,7 @@ export async function addPrescription(encounterId: string, items: RxItemInput[])
       patientId: enc.patientId,
       encounterId,
       status: 'proposed',
-      dispenseType: 'IN_HOUSE',
+      dispenseType,
       issuedByUserId: s.userId,
       items: {
         create: items.map((i) => ({
@@ -181,6 +198,7 @@ export async function addPrescription(encounterId: string, items: RxItemInput[])
           timesPerDay: i.timesPerDay,
           days: i.days,
           route: i.route,
+          comment: i.usage ?? null,
         })),
       },
     },
