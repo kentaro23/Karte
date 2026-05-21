@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { prisma } from '@medixus/db';
+import { prisma, isDemoMode } from '@medixus/db';
 
 /**
  * 本番運用の自己診断 — `/api/diag` で叩く。
@@ -13,6 +13,7 @@ export async function GET() {
   const result: Record<string, unknown> = {
     timestamp: new Date().toISOString(),
     node: process.version,
+    demo_mode: isDemoMode,
     env: {
       NODE_ENV: process.env.NODE_ENV ?? null,
       DATABASE_URL_set: Boolean(process.env.DATABASE_URL),
@@ -22,6 +23,14 @@ export async function GET() {
       VERCEL_REGION: process.env.VERCEL_REGION ?? null,
     },
   };
+
+  if (isDemoMode) {
+    // Skip live DB probes — the proxy would just return fixtures.
+    result.note =
+      'Frontend-only / demo mode active because DATABASE_URL is unset. UI renders with sample data and auto-logs in as 研修 太郎 (DOCTOR).';
+    result.prisma_client = 'demo-proxy';
+    return NextResponse.json(result, { status: 200 });
+  }
 
   // 1. Prisma client construction
   try {
