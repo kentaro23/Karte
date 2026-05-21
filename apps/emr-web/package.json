@@ -23,7 +23,7 @@
     "@medixus/rule-engine": "workspace:*",
     "@medixus/master-import": "workspace:*",
     "@medixus/ui": "workspace:*",
-    "next": "15.0.3",
+    "next": "15.5.18",
     "react": "19.0.0",
     "react-dom": "19.0.0"
   },

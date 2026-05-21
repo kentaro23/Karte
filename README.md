@@ -86,3 +86,36 @@ pnpm import:drugs /path/to/医薬品マスター.zip 2026-04
   （ブラウザは ⌘⇧R でハードリロード）。**`pnpm dev` 稼働中に `pnpm build` を実行しない**
   （同一 `.next` を共有し壊れる）。本番確認は dev を止めてから `pnpm --filter @medixus/emr-web build`
 - 仕様対応状況は `docs/traceability-174.md`
+
+## Vercel 本番デプロイ
+
+リポジトリは `kentaro23/Karte` を main にホストし、Vercel が turbo を自動検知してビルド。
+
+### プロジェクト設定（Vercel ダッシュボード）
+- **Root Directory**: `apps/emr-web`
+- **Framework Preset**: Next.js（自動検知）
+- **Install Command**: `pnpm install`（自動）
+- **Build Command**: `turbo run build`（自動）
+- **Output Directory**: `.next`（既定）
+
+### 必須環境変数（Project Settings → Environment Variables）
+| キー | 用途 | 例 |
+|---|---|---|
+| `DATABASE_URL` | Postgres 接続文字列。Vercel Postgres / Neon / Supabase / RDS など | `postgres://user:pass@host:5432/db?sslmode=require` |
+| `AUTH_SECRET` | セッション署名鍵（最低 32 文字の乱数） | `openssl rand -base64 48` で生成 |
+
+未設定だとビルドは通っても全ページ 500（Prisma が接続できない / セッション検証不能）。
+
+### 初回デプロイ後の DB 初期化（一度だけ）
+本番 DB に対してスキーマ＋トリガ＋デモシードを流す。ローカルから本番 DB の `DATABASE_URL` を一時的に向けて実行：
+```
+# .env を編集して本番 DATABASE_URL に向ける（または DATABASE_URL=... を export）
+pnpm db:migrate            # スキーマ
+pnpm db:triggers           # 追記専用＋監査ハッシュチェーン
+pnpm seed                  # デモクリニック・職員・患者34・処方・薬剤150品目
+pnpm import:drugs:bundle   # data/drugs/manifest.json から 19,485 品目を投入
+```
+
+### 既知の運用上の留意
+- Next.js は **15.5.x 以上**（CVE-2025-29927 対応）。Vercel は 15.0.x など脆弱版のデプロイを拒否する。
+- `force-dynamic` を `(emr)/layout.tsx` に宣言済み → 全 EMR ルートは on-demand SSR。ビルド時に DB 不要。
