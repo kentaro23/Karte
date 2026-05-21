@@ -11,6 +11,7 @@
   },
   "scripts": {
     "generate": "prisma generate",
+    "build": "prisma generate",
     "migrate": "prisma migrate dev --name init --skip-generate && prisma generate",
     "push": "prisma db push",
     "triggers": "prisma db execute --file ../../db/triggers.sql --schema prisma/schema.prisma",
