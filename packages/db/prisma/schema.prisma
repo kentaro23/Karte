@@ -5,7 +5,12 @@
 // hash-chained audit, RBAC + per-patient ACL.
 
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
+  // "native" keeps local dev working on macOS/Linux/Windows; the Vercel
+  // serverless target (AWS Lambda / Amazon Linux 2023) needs the
+  // rhel-openssl-3.0.x query engine binary or runtime fails with
+  // "Cannot find module .prisma/client/default" / engine load errors.
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
 }
 
 datasource db {

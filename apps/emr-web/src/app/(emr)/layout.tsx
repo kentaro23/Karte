@@ -15,15 +15,28 @@ export const dynamic = 'force-dynamic';
 export default async function EmrLayout({ children }: { children: ReactNode }) {
   const s = await requireSession();
   const hdr = await headers();
-  const [clinic, pendingRx, unapproved] = await Promise.all([
-    prisma.clinic.findFirst({ select: { name: true } }),
-    prisma.prescription.count({ where: { status: 'rule_checked' } }),
-    prisma.countersign.count({ where: { status: 'UNAPPROVED' } }),
-  ]);
+  // Header notification counts are non-critical: if the DB is unreachable
+  // we still want the page chrome to render so the user can navigate to
+  // /login or read the error page rather than seeing a generic 500.
+  let clinicName = 'Medixus Clinic';
+  let pendingRx = 0;
+  let unapproved = 0;
+  try {
+    const [clinic, pendingRxN, unapprovedN] = await Promise.all([
+      prisma.clinic.findFirst({ select: { name: true } }),
+      prisma.prescription.count({ where: { status: 'rule_checked' } }),
+      prisma.countersign.count({ where: { status: 'UNAPPROVED' } }),
+    ]);
+    if (clinic?.name) clinicName = clinic.name;
+    pendingRx = pendingRxN;
+    unapproved = unapprovedN;
+  } catch (err) {
+    console.error('[EmrLayout] DB notification fetch failed:', err);
+  }
   return (
     <AppChrome
       user={{ name: s.name, jobType: s.jobType }}
-      clinicName={clinic?.name ?? 'Medixus Clinic'}
+      clinicName={clinicName}
       terminalId={hdr.get('x-terminal-id') ?? 'web-01'}
       notifications={pendingRx + unapproved}
       logoutAction={logoutAction}
