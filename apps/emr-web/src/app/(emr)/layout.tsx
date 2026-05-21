@@ -5,6 +5,13 @@ import { requireSession } from '@/lib/session';
 import { AppChrome } from '@/components/app-chrome';
 import { logoutAction, switchUserAction, unlockAction } from './_actions';
 
+// All EMR routes touch the database via this layout and per-page Prisma
+// calls; skip Next.js's static-discovery render so the build does not need
+// a live DATABASE_URL. Runtime behaviour (cookies/headers based session)
+// already forces dynamic rendering; this declaration just makes it explicit
+// so Vercel builds succeed without DB connectivity.
+export const dynamic = 'force-dynamic';
+
 export default async function EmrLayout({ children }: { children: ReactNode }) {
   const s = await requireSession();
   const hdr = await headers();
