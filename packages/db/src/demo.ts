@@ -33,29 +33,40 @@ const DEMO_DEPARTMENTS = [
   { id: 'demo-dep-5', clinicId: 'demo-clinic', code: 'DRM', name: '皮膚科',  isActive: true },
 ];
 
-const DEMO_WARDS = [
-  { id: 'demo-w-1', clinicId: 'demo-clinic', name: '3階東病棟', code: '3E', floor: 3 },
-  { id: 'demo-w-2', clinicId: 'demo-clinic', name: '3階西病棟', code: '3W', floor: 3 },
-  { id: 'demo-w-3', clinicId: 'demo-clinic', name: '4階南病棟', code: '4S', floor: 4 },
-];
+// Nested ward → rooms → beds. Pre-embedded so that pages relying on
+// Prisma's `include: { rooms: { include: { beds: true } } }` still receive
+// the related rows in demo mode (the proxy itself doesn't synthesise
+// includes — it just hands back whatever we put on the sample row).
+const DEMO_WARD_DEFS = [
+  { id: 'demo-w-1', clinicId: 'demo-clinic', name: '3階東病棟', code: '3E', floor: 3, roomCount: 4 },
+  { id: 'demo-w-2', clinicId: 'demo-clinic', name: '3階西病棟', code: '3W', floor: 3, roomCount: 4 },
+  { id: 'demo-w-3', clinicId: 'demo-clinic', name: '4階南病棟', code: '4S', floor: 4, roomCount: 5 },
+] as const;
 
-const DEMO_ROOMS = DEMO_WARDS.flatMap((w, wi) =>
-  Array.from({ length: 6 }, (_, i) => ({
-    id: `demo-r-${wi + 1}-${i + 1}`,
-    wardId: w.id,
-    name: `${w.floor}${String.fromCharCode(65 + wi)}-${i + 1}`,
-    capacity: 4,
-  })),
-);
+const DEMO_WARDS = DEMO_WARD_DEFS.map((w) => {
+  const rooms = Array.from({ length: w.roomCount }, (_, ri) => {
+    const roomCode = `${w.code}-${ri + 1}`;
+    const beds = Array.from({ length: 4 }, (_, bi) => ({
+      id: `demo-bed-${w.id}-${ri + 1}-${bi + 1}`,
+      roomId: `demo-room-${w.id}-${ri + 1}`,
+      code: `${roomCode}-${bi + 1}`,
+      number: bi + 1,
+      isOccupied: bi < 2,
+    }));
+    return {
+      id: `demo-room-${w.id}-${ri + 1}`,
+      wardId: w.id,
+      code: roomCode,
+      name: `${roomCode} 号室`,
+      capacity: 4,
+      beds,
+    };
+  });
+  return { id: w.id, clinicId: w.clinicId, name: w.name, code: w.code, floor: w.floor, rooms };
+});
 
-const DEMO_BEDS = DEMO_ROOMS.flatMap((r) =>
-  Array.from({ length: 4 }, (_, i) => ({
-    id: `demo-b-${r.id}-${i + 1}`,
-    roomId: r.id,
-    number: i + 1,
-    isOccupied: i < 2,
-  })),
-);
+const DEMO_ROOMS = DEMO_WARDS.flatMap((w) => w.rooms);
+const DEMO_BEDS = DEMO_ROOMS.flatMap((r) => r.beds);
 
 const PATIENT_LAST = ['佐藤', '鈴木', '高橋', '田中', '伊藤', '渡辺', '山本', '中村', '小林', '加藤', '吉田', '山田', '佐々木', '山口', '松本'];
 const PATIENT_FIRST = ['太郎', '花子', '次郎', '美咲', '三郎', '由美', '四郎', '加奈', '五郎', '麻衣', '誠', '愛', '健', '智子', '翔'];
