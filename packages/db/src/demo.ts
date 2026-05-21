@@ -92,6 +92,26 @@ const DEMO_PATIENTS = Array.from({ length: 15 }, (_, i) => ({
   mergedIntoId: null,
   createdAt: ago(60 - i * 3),
   updatedAt: ago(7),
+  // Embedded relations so `include: { allergies, infections, profile }`
+  // returns populated lists when read through the demo proxy.
+  allergies:
+    i === 1
+      ? [{ id: `demo-allerg-${i}-1`, patientId: `demo-pat-${i + 1}`, substance: 'ペニシリン', severity: 'SEVERE', note: '蕁麻疹' }]
+      : i === 3
+        ? [{ id: `demo-allerg-${i}-1`, patientId: `demo-pat-${i + 1}`, substance: '卵', severity: 'MODERATE', note: null }]
+        : [],
+  infections:
+    i === 2
+      ? [{ id: `demo-inf-${i}-1`, patientId: `demo-pat-${i + 1}`, pathogen: 'HBV', status: 'CARRIER', testedAt: ago(180) }]
+      : [],
+  profile: {
+    id: `demo-profile-${i + 1}`,
+    patientId: `demo-pat-${i + 1}`,
+    bloodType: ['A', 'B', 'O', 'AB'][i % 4],
+    height: 150 + (i % 30),
+    weight: 50 + (i % 30),
+    note: null,
+  },
 }));
 
 const DEMO_STAFF = [
@@ -132,6 +152,70 @@ const DEMO_APPOINTMENTS = DEMO_PATIENTS.slice(0, 6).map((p, i) => ({
   createdAt: ago(7 - i),
 }));
 
+// A small but recognisable drug catalogue so the chart screen's drug
+// picker is browseable in demo mode. Real production data comes from
+// the public formulary import; this is purely cosmetic.
+const DRUG_SEED: ReadonlyArray<{
+  brand: string;
+  generic: string;
+  unit: string;
+  route: string;
+}> = [
+  { brand: 'カロナール錠200mg',         generic: 'アセトアミノフェン',     unit: 'mg', route: 'PO' },
+  { brand: 'ロキソニン錠60mg',           generic: 'ロキソプロフェンナトリウム', unit: 'mg', route: 'PO' },
+  { brand: 'ボルタレン錠25mg',           generic: 'ジクロフェナクナトリウム', unit: 'mg', route: 'PO' },
+  { brand: 'ムコダイン錠500mg',          generic: 'カルボシステイン',       unit: 'mg', route: 'PO' },
+  { brand: 'ムコサール錠15mg',           generic: 'アンブロキソール塩酸塩', unit: 'mg', route: 'PO' },
+  { brand: 'メジコン錠15mg',             generic: 'デキストロメトルファン臭化水素酸塩', unit: 'mg', route: 'PO' },
+  { brand: 'アレグラ錠60mg',             generic: 'フェキソフェナジン塩酸塩', unit: 'mg', route: 'PO' },
+  { brand: 'クラリチン錠10mg',           generic: 'ロラタジン',             unit: 'mg', route: 'PO' },
+  { brand: 'タリオン錠10mg',             generic: 'ベポタスチンベシル酸塩', unit: 'mg', route: 'PO' },
+  { brand: 'PL配合顆粒',                  generic: '総合感冒薬',             unit: 'g',  route: 'PO' },
+  { brand: 'クラビット錠500mg',          generic: 'レボフロキサシン水和物', unit: 'mg', route: 'PO' },
+  { brand: 'サワシリン錠250mg',          generic: 'アモキシシリン水和物',   unit: 'mg', route: 'PO' },
+  { brand: 'クラリス錠200mg',            generic: 'クラリスロマイシン',     unit: 'mg', route: 'PO' },
+  { brand: 'メイアクトMS錠100mg',        generic: 'セフジトレンピボキシル', unit: 'mg', route: 'PO' },
+  { brand: 'ジスロマック錠250mg',        generic: 'アジスロマイシン水和物', unit: 'mg', route: 'PO' },
+  { brand: 'タミフルカプセル75mg',       generic: 'オセルタミビルリン酸塩', unit: 'mg', route: 'PO' },
+  { brand: 'リレンザ',                    generic: 'ザナミビル水和物',       unit: 'mg', route: 'INH' },
+  { brand: 'オメプラール錠20mg',         generic: 'オメプラゾール',         unit: 'mg', route: 'PO' },
+  { brand: 'タケプロンOD錠15mg',         generic: 'ランソプラゾール',       unit: 'mg', route: 'PO' },
+  { brand: 'ネキシウムカプセル20mg',     generic: 'エソメプラゾールマグネシウム水和物', unit: 'mg', route: 'PO' },
+  { brand: 'ガスター錠20mg',             generic: 'ファモチジン',           unit: 'mg', route: 'PO' },
+  { brand: 'マグミット錠330mg',          generic: '酸化マグネシウム',       unit: 'mg', route: 'PO' },
+  { brand: 'プルゼニド錠12mg',           generic: 'センノシド',             unit: 'mg', route: 'PO' },
+  { brand: 'ノルバスク錠5mg',            generic: 'アムロジピンベシル酸塩', unit: 'mg', route: 'PO' },
+  { brand: 'ブロプレス錠8mg',            generic: 'カンデサルタンシレキセチル', unit: 'mg', route: 'PO' },
+  { brand: 'ディオバン錠80mg',           generic: 'バルサルタン',           unit: 'mg', route: 'PO' },
+  { brand: 'メインテート錠2.5mg',        generic: 'ビソプロロールフマル酸塩', unit: 'mg', route: 'PO' },
+  { brand: 'ラシックス錠40mg',           generic: 'フロセミド',             unit: 'mg', route: 'PO' },
+  { brand: 'クレストール錠2.5mg',        generic: 'ロスバスタチンカルシウム', unit: 'mg', route: 'PO' },
+  { brand: 'リピトール錠10mg',           generic: 'アトルバスタチンカルシウム水和物', unit: 'mg', route: 'PO' },
+  { brand: 'メトグルコ錠250mg',          generic: 'メトホルミン塩酸塩',     unit: 'mg', route: 'PO' },
+  { brand: 'アマリール錠1mg',            generic: 'グリメピリド',           unit: 'mg', route: 'PO' },
+  { brand: 'ジャヌビア錠50mg',           generic: 'シタグリプチンリン酸塩水和物', unit: 'mg', route: 'PO' },
+  { brand: 'デパス錠0.5mg',              generic: 'エチゾラム',             unit: 'mg', route: 'PO' },
+  { brand: 'マイスリー錠5mg',            generic: 'ゾルピデム酒石酸塩',     unit: 'mg', route: 'PO' },
+  { brand: 'プレドニン錠5mg',            generic: 'プレドニゾロン',         unit: 'mg', route: 'PO' },
+  { brand: 'ワーファリン錠1mg',          generic: 'ワルファリンカリウム',   unit: 'mg', route: 'PO' },
+  { brand: 'バイアスピリン錠100mg',      generic: 'アスピリン',             unit: 'mg', route: 'PO' },
+  { brand: 'ヘパリンナトリウム注5000単位/5mL', generic: 'ヘパリンナトリウム', unit: '単位', route: 'IV' },
+  { brand: '生理食塩液 100mL',           generic: '生理食塩液',             unit: 'mL', route: 'IV' },
+];
+const DEMO_DRUGS = DRUG_SEED.map((d, i) => ({
+  id: `demo-drug-${i + 1}`,
+  brandName: d.brand,
+  genericName: d.generic,
+  strengthUnit: d.unit,
+  administrationRoute: d.route,
+  yjCode: `${String(i + 1).padStart(4, '0')}001F1027`,
+  receiptCode: String(620000000 + i),
+  unitPrice: 10 + i * 3,
+  isActive: true,
+  createdAt: ago(365),
+  updatedAt: ago(30),
+}));
+
 // Map model name (camelCase as Prisma uses it) -> sample rows.
 const SAMPLE: Record<string, ReadonlyArray<Record<string, unknown>>> = {
   clinic: [DEMO_CLINIC],
@@ -156,9 +240,11 @@ const SAMPLE: Record<string, ReadonlyArray<Record<string, unknown>>> = {
   prescription: [],
   countersign: [],
   patientSelectionLog: [],
-  drugProduct: [],
+  drugProduct: DEMO_DRUGS,
   drugIngredient: [],
   drugContraindication: [],
+  drugIndication: [],
+  drugProductIngredient: [],
   examMaster: [],
   diseaseMaster: [],
   importRun: [],
