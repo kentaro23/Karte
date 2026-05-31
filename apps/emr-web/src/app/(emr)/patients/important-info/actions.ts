@@ -87,7 +87,7 @@ const DEMO_INFO: Omit<ImportantInfo, 'patients' | 'selectedId' | 'demo'> = {
 function demoInfo(selectedId: string | null): ImportantInfo {
   return {
     patients: DEMO_PATIENTS,
-    selectedId: selectedId ?? DEMO_PATIENTS[0].id,
+    selectedId: selectedId ?? DEMO_PATIENTS[0]?.id ?? '',
     ...DEMO_INFO,
     demo: true,
   };
@@ -113,7 +113,7 @@ export async function loadImportantInfo(patientId?: string): Promise<ImportantIn
     });
     if (patients.length === 0) return demoInfo(patientId ?? null);
 
-    const selectedId = patientId && patients.some((p) => p.id === patientId) ? patientId : patients[0].id;
+    const selectedId = patientId && patients.some((p) => p.id === patientId) ? patientId : (patients[0]?.id ?? '');
     const [allergies, infections, histories, family] = await Promise.all([
       prisma.allergy.findMany({ where: { patientId: selectedId }, orderBy: { recordedAt: 'desc' } }),
       prisma.infection.findMany({ where: { patientId: selectedId } }),
