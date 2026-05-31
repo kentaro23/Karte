@@ -86,8 +86,8 @@ const EXAM_CATEGORY_POINTS: Record<string, number> = {
 };
 function examPoints(category?: string | null): number {
   if (!category) return 11;
-  for (const key of Object.keys(EXAM_CATEGORY_POINTS)) {
-    if (category.includes(key)) return EXAM_CATEGORY_POINTS[key];
+  for (const [key, points] of Object.entries(EXAM_CATEGORY_POINTS)) {
+    if (category.includes(key)) return points;
   }
   return 11;
 }
@@ -464,6 +464,7 @@ async function advanceOrderTo(
   if (startIdx < 0) return; // 既に DONE 以降など → 何もしない
   for (let i = startIdx + 1; i < PATH_TO_RESULT.length; i++) {
     const next = PATH_TO_RESULT[i];
+    if (!next) break;
     try {
       assertOrderTransition(cur, next);
       await prisma.order.update({ where: { id: orderId }, data: { status: next } });

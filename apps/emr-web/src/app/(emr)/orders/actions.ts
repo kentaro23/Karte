@@ -134,8 +134,8 @@ const EXAM_CATEGORY_POINTS: Record<string, number> = {
 };
 function examPoints(category?: string | null): number {
   if (!category) return 11;
-  for (const key of Object.keys(EXAM_CATEGORY_POINTS)) {
-    if (category.includes(key)) return EXAM_CATEGORY_POINTS[key];
+  for (const [key, points] of Object.entries(EXAM_CATEGORY_POINTS)) {
+    if (category.includes(key)) return points;
   }
   return 11;
 }

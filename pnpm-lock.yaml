@@ -35,6 +35,9 @@ importers:
       '@medixus/domain':
         specifier: workspace:*
         version: link:../../packages/domain
+      '@medixus/interop':
+        specifier: workspace:*
+        version: link:../../packages/interop
       '@medixus/master-import':
         specifier: workspace:*
         version: link:../../packages/master-import

@@ -224,7 +224,6 @@ export async function listTemplates(): Promise<{
 
   try {
     const deps = await prisma.department.findMany({
-      where: { isActive: true },
       orderBy: { name: 'asc' },
       select: { id: true, name: true },
     });

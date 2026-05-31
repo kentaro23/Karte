@@ -330,7 +330,7 @@ function NewInjectionForm({
   onCreated: () => void;
 }) {
   const [patientId, setPatientId] = React.useState('');
-  const [route, setRoute] = React.useState(ROUTE_OPTIONS[1]);
+  const [route, setRoute] = React.useState<string>(ROUTE_OPTIONS[1]!);
   const [q, setQ] = React.useState('');
   const [results, setResults] = React.useState<InjectionMasterCandidate[]>([]);
   const [searching, setSearching] = React.useState(false);

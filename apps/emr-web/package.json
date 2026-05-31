@@ -22,6 +22,7 @@
     "@medixus/order-checks": "workspace:*",
     "@medixus/rule-engine": "workspace:*",
     "@medixus/master-import": "workspace:*",
+    "@medixus/interop": "workspace:*",
     "@medixus/ui": "workspace:*",
     "next": "15.5.18",
     "react": "19.0.0",
