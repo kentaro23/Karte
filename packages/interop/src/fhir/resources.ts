@@ -63,7 +63,9 @@ export interface FhirAllergyIntolerance {
   resourceType: 'AllergyIntolerance';
   id?: string;
   patient: FhirReference;
+  clinicalStatus?: FhirCodeableConcept; // active 等
   category?: ('medication' | 'food' | 'environment' | 'biologic')[];
+  criticality?: 'low' | 'high' | 'unable-to-assess';
   code: FhirCodeableConcept;
   reaction?: { manifestation: FhirCodeableConcept[] }[];
 }
@@ -89,20 +91,58 @@ export interface FhirPatient {
   birthDate?: string;
 }
 
+/** 医療機関/診療科 → Organization (紹介元/紹介先・文書の custodian/author)。 */
+export interface FhirOrganization {
+  resourceType: 'Organization';
+  id?: string;
+  name?: string;
+}
+
+/**
+ * 文書ヘッダ → Composition。3文書(HS037健診/HS038診療情報提供書/HS039退院サマリ)の
+ * 構造化文書(type: 'document')の起点。section.entry が本文リソースを参照する。
+ */
+export interface FhirComposition {
+  resourceType: 'Composition';
+  id?: string;
+  status: 'preliminary' | 'final' | 'amended';
+  /** 文書種別 (LOINC + CLINS-IG 文書コード)。 */
+  type: FhirCodeableConcept;
+  subject: FhirReference;
+  date?: string;
+  title?: string;
+  author?: FhirReference[];
+  custodian?: FhirReference;
+  section?: {
+    title?: string;
+    code?: FhirCodeableConcept;
+    text?: { status: 'generated'; div: string };
+    entry?: FhirReference[];
+  }[];
+}
+
 /** Bundle に格納しうる全リソースのユニオン。 */
 export type FhirResource =
+  | FhirComposition
   | FhirPatient
+  | FhirOrganization
   | FhirCondition
   | FhirObservation
   | FhirAllergyIntolerance
   | FhirMedicationRequest;
+
+/** Bundle entry。document Bundle では fullUrl を付与してリソース内参照を解決する。 */
+export interface FhirBundleEntry {
+  fullUrl?: string;
+  resource: FhirResource;
+}
 
 /** FHIR Bundle (collection/document)。3文書6情報の出力/取込の搬送形式。 */
 export interface FhirBundle {
   resourceType: 'Bundle';
   type: 'collection' | 'document' | 'transaction';
   timestamp?: string;
-  entry: { resource: FhirResource }[];
+  entry: FhirBundleEntry[];
 }
 
 /** 既知のコード体系 system URI / 内部識別子 (本番化時 公式URIに置換)。 */
@@ -112,4 +152,24 @@ export const FHIR_CODE_SYSTEMS = {
   yj: 'urn:oid:1.2.392.100495.20.2.73', // YJコード
   hot: 'urn:oid:1.2.392.200119.4.403.1', // 医薬品HOTコード
   jFagy: 'urn:medixus:jfagy', // J-FAGY (本番化時 公式OIDへ)
+  loinc: 'http://loinc.org', // 文書種別/検査(LOINC)
+  conditionVerStatus: 'http://terminology.hl7.org/CodeSystem/condition-ver-status',
+  conditionClinical: 'http://terminology.hl7.org/CodeSystem/condition-clinical',
+  observationCategory: 'http://terminology.hl7.org/CodeSystem/observation-category',
+  observationInterpretation:
+    'http://terminology.hl7.org/CodeSystem/v3-ObservationInterpretation',
+  allergyClinical: 'http://terminology.hl7.org/CodeSystem/allergyintolerance-clinical',
+} as const;
+
+/**
+ * 3文書(CLINS-IG / HS037-039)の文書種別コード。
+ * LOINC文書コード + 厚労省 HS番号 を併記する (本番化時 CLINS-IG 確定値へ)。
+ */
+export const FHIR_DOCUMENT_TYPES = {
+  /** HS037 健康診断結果報告書。 */
+  CHECKUP: { hs: 'HS037', loinc: '11502-2', display: '健康診断結果報告書' },
+  /** HS038 診療情報提供書 (紹介状)。 */
+  REFERRAL: { hs: 'HS038', loinc: '57133-1', display: '診療情報提供書' },
+  /** HS039 退院時サマリー。 */
+  DISCHARGE_SUMMARY: { hs: 'HS039', loinc: '18842-5', display: '退院時サマリー' },
 } as const;

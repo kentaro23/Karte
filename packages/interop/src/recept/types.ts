@@ -47,6 +47,33 @@ export interface ReceiptDiagnosisPayload {
   outcome?: string;
 }
 
+/**
+ * 処方明細の算定連携付随情報 (category:'RX' / 'INJECTION' のとき有効)。
+ * 一般名処方は YJコード下3桁 zzz で表現 (要件定義書 IF-EXT-05 / 6.2)。院内/院外の
+ * 調剤区分・臨時・一包化・適応外などは PrescriptionItem 拡張に対応する。
+ */
+export interface ReceiptPrescriptionDetail {
+  /** 1回量。 */
+  dose?: number;
+  doseUnit?: string;
+  /** 1日回数。 */
+  frequencyPerDay?: number;
+  /** 投与日数 (内服) / 回数 (頓服)。 */
+  days?: number;
+  /** 用法 (例 '1日3回 毎食後')。 */
+  usage?: string;
+  /** 院内/院外 調剤区分 (PrescriptionItem.dispenseType 相当)。 */
+  dispenseType?: 'IN_HOUSE' | 'OUTSIDE';
+  /** 一般名処方 (YJ下3桁 zzz 相当)。 */
+  isGenericName?: boolean;
+  /** 臨時投与 (PrescriptionItem.isTemporary 相当)。 */
+  isTemporary?: boolean;
+  /** 一包化 (PrescriptionItem.isOnePackage 相当)。 */
+  isOnePackage?: boolean;
+  /** 適応外使用 (PrescriptionItem.isOffLabel 相当)。 */
+  isOffLabel?: boolean;
+}
+
 /** 診療行為・処方・検査の算定対象明細。 */
 export interface ReceiptOrderLine {
   category: 'RX' | 'INJECTION' | 'PROCEDURE' | 'EXAM' | 'OTHER';
@@ -55,6 +82,8 @@ export interface ReceiptOrderLine {
   name: string;
   quantity?: number;
   unit?: string;
+  /** 処方/注射明細の算定付随情報 (処方の算定連携)。 */
+  prescription?: ReceiptPrescriptionDetail;
 }
 
 /**
@@ -77,11 +106,19 @@ export interface ReceiptClaimResult {
   acceptedNo?: string;
   totalPoints?: number;
   lines?: { name: string; points: number }[];
+  /** 中途終了データとして登録された場合 true (interim 連携の確認用)。 */
+  interim?: boolean;
 }
 
-/** レセコン点数マスタ取込 (ORCA→Medixus) 結果。 */
+/**
+ * レセコン点数マスタ取込 (ORCA→Medixus) 結果。
+ * 版・チェックサムは MIG-02 マスタ初期取込 (ImportRun) に対応 (要件定義書 表)。
+ */
 export interface ReceiptMasterImportResult {
   masterType: 'PROCEDURE' | 'DRUG' | 'DEVICE' | 'OTHER';
   importedCount: number;
+  /** 取込元マスタの版 (例 '令和6年改定' / リリース番号)。 */
   sourceRelease?: string;
+  /** 取込データのチェックサム (ImportRun 記録用)。 */
+  checksum?: string;
 }
