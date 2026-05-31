@@ -363,7 +363,9 @@ export async function fetchSixInfo(formData: FormData): Promise<SixInfoResult> {
       mynaCardToken,
       confirmationDate: new Date().toISOString(),
     });
-    if (res.status === 'OK' && res.data) {
+    // 本番化で AdapterStatus が 'OK' 等へ拡張されたら live:true で実データへ自動切替。
+    // 現契約は status:'STUB' のみ（'STUB' 型のため string 比較で前方互換に判定）。
+    if ((res.status as string) === 'OK' && res.data) {
       return { status: res.status, live: true, data: res.data };
     }
     // STUB / エラー時は参照導線の検証用デモ6情報を返す（fail-soft）。
