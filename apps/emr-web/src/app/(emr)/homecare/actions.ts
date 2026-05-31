@@ -45,7 +45,7 @@ async function resolveHomecareDepartment(): Promise<string | null> {
   try {
     const dep =
       (await prisma.department.findFirst({ where: { name: { contains: '在宅' } } })) ??
-      (await prisma.department.findFirst({ orderBy: { createdAt: 'asc' } }));
+      (await prisma.department.findFirst({ orderBy: { code: 'asc' } }));
     return dep?.id ?? null;
   } catch {
     return null;
