@@ -145,7 +145,7 @@ async function loadUlcers(patientId: string): Promise<Loaded> {
         `Necrotic tissue 壊死組織: ${u.necroticScore}`,
         `Pocket ポケット: ${u.pocketScore}`,
       ]
-        .filter((l) => l !== undefined && l !== false)
+        .filter((l): l is string => typeof l === 'string')
         .join('\n'),
       createdAt: u.assessedOn,
     }));
