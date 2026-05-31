@@ -48,12 +48,13 @@ async function resolveIngredientCode(substance: string): Promise<string | null> 
         },
       },
     });
-    if (!drug || drug.ingredients.length === 0) return null;
+    const first = drug?.ingredients[0];
+    if (!first) return null;
     // 物質名に最も一致する成分を優先（無ければ先頭）。
     const exact = drug.ingredients.find((pi) =>
       pi.ingredient.ingredientName.includes(term),
     );
-    return (exact ?? drug.ingredients[0]).ingredient.ingredientCode;
+    return (exact ?? first).ingredient.ingredientCode;
   } catch (err) {
     console.error('[questionnaire] resolveIngredientCode failed (fail-soft):', err);
     return null;

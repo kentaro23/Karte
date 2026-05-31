@@ -37,8 +37,15 @@ const DEMO_PATIENTS: PatientRow[] = [
   { id: 'demo-pat-4', patientNo: '100004', kanjiLastName: '田中', kanjiFirstName: '美咲' },
 ];
 
+const DEMO_PATIENT_FALLBACK: PatientRow = DEMO_PATIENTS[0] ?? {
+  id: 'demo-pat-1',
+  patientNo: '100001',
+  kanjiLastName: '佐藤',
+  kanjiFirstName: '太郎',
+};
+
 function demoSelected(id: string): SelectedPatient {
-  const base = DEMO_PATIENTS.find((p) => p.id === id) ?? DEMO_PATIENTS[0];
+  const base = DEMO_PATIENTS.find((p) => p.id === id) ?? DEMO_PATIENT_FALLBACK;
   return {
     ...base,
     dateOfBirth: new Date(1968, 4, 12),
