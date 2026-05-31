@@ -332,11 +332,11 @@ model Clinic {
 }
 
 model Department {
-  id       String  @id @default(cuid())
+  id       String @id @default(cuid())
   clinicId String
   code     String
   name     String
-  clinic   Clinic  @relation(fields: [clinicId], references: [id])
+  clinic   Clinic @relation(fields: [clinicId], references: [id])
 
   @@unique([clinicId, code])
 }
@@ -387,7 +387,7 @@ model StaffUser {
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
 
-  clinic      Clinic                  @relation(fields: [clinicId], references: [id])
+  clinic      Clinic             @relation(fields: [clinicId], references: [id])
   credential  StaffCredential?
   mfaFactors  MfaFactor[]
   sessions    AuthSession[]
@@ -484,20 +484,20 @@ model PatientAccessControl {
 // Hash-chained, fully immutable audit log (別紙3 #25-30, 真正性).
 // db/triggers.sql forbids UPDATE/DELETE and computes rowHash from prevHash.
 model AuditEvent {
-  id         String      @id @default(cuid())
-  seq        BigInt      @default(autoincrement())
+  id          String      @id @default(cuid())
+  seq         BigInt      @default(autoincrement())
   actorUserId String?
-  patientId  String?
-  action     AuditAction
-  resource   String?
-  resourceId String?
-  terminalId String?
-  ip         String?
-  result     String      @default("OK")
-  detail     Json?
-  prevHash   String?
-  rowHash    String?
-  createdAt  DateTime    @default(now())
+  patientId   String?
+  action      AuditAction
+  resource    String?
+  resourceId  String?
+  terminalId  String?
+  ip          String?
+  result      String      @default("OK")
+  detail      Json?
+  prevHash    String?
+  rowHash     String?
+  createdAt   DateTime    @default(now())
 
   @@index([patientId, createdAt])
   @@index([actorUserId, createdAt])
@@ -564,20 +564,21 @@ model Patient {
   mergedIntoId    String? // 患者ID統合 (logical, never physical)
   createdAt       DateTime @default(now())
 
-  clinic        Clinic                 @relation(fields: [clinicId], references: [id])
-  allergies     Allergy[]
-  infections    Infection[]
-  histories     MedicalHistory[]
-  family        FamilyMember[]
-  insurances    Insurance[]
-  profile       PatientProfile?
-  encounters    Encounter[]
-  appointments  Appointment[]
-  notes         ClinicalNote[]
-  orders        Order[]
-  acls          PatientAccessControl[]
-  diagnoses     PatientDiagnosis[]
-  referrals     Referral[]
+  clinic       Clinic                 @relation(fields: [clinicId], references: [id])
+  allergies    Allergy[]
+  infections   Infection[]
+  histories    MedicalHistory[]
+  family       FamilyMember[]
+  insurances   Insurance[]
+  profile      PatientProfile?
+  encounters   Encounter[]
+  appointments Appointment[]
+  notes        ClinicalNote[]
+  orders       Order[]
+  acls         PatientAccessControl[]
+  diagnoses    PatientDiagnosis[]
+  referrals    Referral[]
+  labResults   LabResult[]
 
   @@index([clinicId])
   @@index([kanaLastName, kanaFirstName])
@@ -610,12 +611,12 @@ model Infection {
 }
 
 model MedicalHistory {
-  id        String    @id @default(cuid())
-  patientId String
-  kind      String // PAST_ILLNESS | SURGERY | MEDICATION | TRANSFUSION
-  name      String
+  id         String    @id @default(cuid())
+  patientId  String
+  kind       String // PAST_ILLNESS | SURGERY | MEDICATION | TRANSFUSION
+  name       String
   occurredOn DateTime?
-  patient   Patient   @relation(fields: [patientId], references: [id])
+  patient    Patient   @relation(fields: [patientId], references: [id])
 
   @@index([patientId])
 }
@@ -633,15 +634,26 @@ model FamilyMember {
 }
 
 model Insurance {
-  id         String    @id @default(cuid())
-  patientId  String
-  payerType  String // SOCIAL | NATIONAL | LATE_ELDERLY | SELF_PAY | PUBLIC
-  payerNo    String?
-  symbol     String?
-  number     String?
-  validFrom  DateTime?
-  validTo    DateTime?
-  patient    Patient   @relation(fields: [patientId], references: [id])
+  id                 String    @id @default(cuid())
+  patientId          String
+  payerType          String // SOCIAL | NATIONAL | LATE_ELDERLY | SELF_PAY | PUBLIC
+  payerNo            String?
+  symbol             String?
+  number             String?
+  branchNo           String? // 被保険者枝番 (2桁) — FR-PAT-04
+  publicPayerNo1     String? // 公費1 負担者番号
+  publicPayerNo2     String? // 公費2 負担者番号
+  publicPayerNo3     String? // 公費3 負担者番号
+  publicRecipientNo1 String? // 公費1 受給者番号
+  publicRecipientNo2 String? // 公費2 受給者番号
+  publicRecipientNo3 String? // 公費3 受給者番号
+  workersComp        Boolean   @default(false) // 労災・自賠
+  specialNote        String? // 特記事項
+  symptomDetail      String? // 症状詳記
+  remarksComment     String? // 摘要欄コメント
+  validFrom          DateTime?
+  validTo            DateTime?
+  patient            Patient   @relation(fields: [patientId], references: [id])
 
   @@index([patientId])
 }
@@ -709,29 +721,30 @@ model Appointment {
 
 // 受診エピソード — outpatient/inpatient/ER. The chart-level state holder.
 model Encounter {
-  id            String          @id @default(cuid())
-  patientId     String
-  appointmentId String?         @unique
-  encounterType EncounterType
-  visitType     VisitType?
-  contactType   ContactType     @default(FACE)
-  departmentId  String
-  wardId        String?
-  insuranceId   String?
-  receptionNo   Int?
+  id              String          @id @default(cuid())
+  patientId       String
+  appointmentId   String?         @unique
+  encounterType   EncounterType
+  visitType       VisitType?
+  contactType     ContactType     @default(FACE)
+  departmentId    String
+  wardId          String?
+  insuranceId     String?
+  receptionNo     Int?
   receptionStatus ReceptionStatus @default(UNRECEIVED)
-  triageLevel   TriageLevel?
-  arrivalMethod String?
-  isTemporaryId Boolean         @default(false)
-  arrivedAt     DateTime?
-  openedByUserId String?
-  createdAt     DateTime        @default(now())
+  triageLevel     TriageLevel?
+  arrivalMethod   String?
+  isTemporaryId   Boolean         @default(false)
+  arrivedAt       DateTime?
+  openedByUserId  String?
+  createdAt       DateTime        @default(now())
 
-  patient      Patient                    @relation(fields: [patientId], references: [id])
-  appointment  Appointment?               @relation(fields: [appointmentId], references: [id])
-  sessions     ClinicalSession[]
-  orders       Order[]
-  transitions  EncounterStatusTransition[]
+  patient     Patient                     @relation(fields: [patientId], references: [id])
+  appointment Appointment?                @relation(fields: [appointmentId], references: [id])
+  sessions    ClinicalSession[]
+  orders      Order[]
+  transitions EncounterStatusTransition[]
+  labResults  LabResult[]
 
   @@index([receptionStatus, departmentId])
   @@index([patientId])
@@ -755,12 +768,12 @@ model EncounterStatusTransition {
 // ─────────────────────────────────────────────────────────────────────────────
 
 model ClinicalSession {
-  id           String   @id @default(cuid())
-  encounterId  String
-  recordedDate DateTime
-  departmentId String
+  id              String   @id @default(cuid())
+  encounterId     String
+  recordedDate    DateTime
+  departmentId    String
   createdByUserId String
-  createdAt    DateTime @default(now())
+  createdAt       DateTime @default(now())
 
   encounter Encounter       @relation(fields: [encounterId], references: [id])
   notes     ClinicalNote[]
@@ -798,10 +811,10 @@ model ClinicalNote {
   amendReason       String?
   createdAt         DateTime     @default(now())
 
-  session         ClinicalSession @relation(fields: [sessionId], references: [id])
-  patient         Patient         @relation(fields: [patientId], references: [id])
-  previousVersion ClinicalNote?   @relation("NoteVersion", fields: [previousVersionId], references: [id])
-  nextVersion     ClinicalNote?   @relation("NoteVersion")
+  session         ClinicalSession  @relation(fields: [sessionId], references: [id])
+  patient         Patient          @relation(fields: [patientId], references: [id])
+  previousVersion ClinicalNote?    @relation("NoteVersion", fields: [previousVersionId], references: [id])
+  nextVersion     ClinicalNote?    @relation("NoteVersion")
   attachments     NoteAttachment[]
   countersign     Countersign?
 
@@ -811,13 +824,14 @@ model ClinicalNote {
 }
 
 model NoteAttachment {
-  id           String  @id @default(cuid())
+  id           String       @id @default(cuid())
   noteId       String
   kind         String // SCHEMA | TEMPLATE | ORDER_REF | IMAGE | PDF | SCAN | LAB_LINK
   refId        String?
+  libraryRef   String? // reference into a shared schema/template library (院内ライブラリ)
   caption      String?
-  displayScale Float   @default(1.0)
-  sortOrder    Int     @default(0)
+  displayScale Float        @default(1.0)
+  sortOrder    Int          @default(0)
   note         ClinicalNote @relation(fields: [noteId], references: [id])
 
   @@index([noteId])
@@ -854,30 +868,32 @@ model Sticky {
 
 // Session-level confirmed header / SOAP cache. Kept for 設計書 compatibility.
 model ClinicalRecord {
-  id               String    @id @default(cuid())
-  sessionId        String    @unique
-  status           String    @default("draft") // draft | approved | locked
-  s                String    @default("")
-  o                String    @default("")
-  a                String    @default("")
-  p                String    @default("")
-  icd10Codes       String[]  @default([])
+  id               String          @id @default(cuid())
+  sessionId        String          @unique
+  status           String          @default("draft") // draft | approved | locked
+  s                String          @default("")
+  o                String          @default("")
+  a                String          @default("")
+  p                String          @default("")
+  icd10Codes       String[]        @default([])
   approvedByUserId String?
   approvedAt       DateTime?
-  createdAt        DateTime  @default(now())
+  createdAt        DateTime        @default(now())
   session          ClinicalSession @relation(fields: [sessionId], references: [id])
 }
 
 model Template {
-  id           String        @id @default(cuid())
-  scope        TemplateScope @default(COMMON)
-  departmentId String?
-  ownerUserId  String?
-  category     String
-  name         String
-  layout       Json
-  version      Int           @default(1)
-  createdAt    DateTime      @default(now())
+  id             String        @id @default(cuid())
+  scope          TemplateScope @default(COMMON)
+  departmentId   String?
+  ownerUserId    String?
+  category       String
+  name           String
+  layout         Json
+  initialContent Json? // 初期記載内容 (default body inserted on apply)
+  conditional    Json? // 条件分岐定義 (show/skip rules)
+  version        Int           @default(1)
+  createdAt      DateTime      @default(now())
 
   instances TemplateInstance[]
 }
@@ -920,13 +936,14 @@ model Order {
   consentDocId      String?
   createdAt         DateTime    @default(now())
 
-  patient         Patient        @relation(fields: [patientId], references: [id])
-  encounter       Encounter      @relation(fields: [encounterId], references: [id])
-  previousVersion Order?         @relation("OrderVersion", fields: [previousVersionId], references: [id])
-  nextVersion     Order?         @relation("OrderVersion")
+  patient         Patient          @relation(fields: [patientId], references: [id])
+  encounter       Encounter        @relation(fields: [encounterId], references: [id])
+  previousVersion Order?           @relation("OrderVersion", fields: [previousVersionId], references: [id])
+  nextVersion     Order?           @relation("OrderVersion")
   reception       OrderReception?
   executions      OrderExecution[]
   prescription    Prescription?
+  labResults      LabResult[]
 
   @@index([encounterId, orderType, scheduledDate])
   @@index([status, departmentId])
@@ -934,23 +951,23 @@ model Order {
 }
 
 model OrderReception {
-  id             String   @id @default(cuid())
-  orderId        String   @unique
+  id               String   @id @default(cuid())
+  orderId          String   @unique
   receivedByUserId String
-  receivedAt     DateTime @default(now())
-  order          Order    @relation(fields: [orderId], references: [id])
+  receivedAt       DateTime @default(now())
+  order            Order    @relation(fields: [orderId], references: [id])
 }
 
 model OrderExecution {
-  id              String    @id @default(cuid())
-  orderId         String
+  id               String    @id @default(cuid())
+  orderId          String
   executedByUserId String
-  executedAt      DateTime  @default(now())
-  result          Json?
+  executedAt       DateTime  @default(now())
+  result           Json?
   approvedByUserId String?
-  approvedAt      DateTime?
-  threePointAuth  Json? // 患者/薬剤/看護師 barcode verification
-  order           Order     @relation(fields: [orderId], references: [id])
+  approvedAt       DateTime?
+  threePointAuth   Json? // 患者/薬剤/看護師 barcode verification
+  order            Order     @relation(fields: [orderId], references: [id])
 
   @@index([orderId])
 }
@@ -966,14 +983,14 @@ model Prescription {
   issuedAt       DateTime?
   createdAt      DateTime     @default(now())
 
-  order      Order               @relation(fields: [orderId], references: [id])
-  items      PrescriptionItem[]
-  checks     RuleCheckResult[]
-  overrides  PrescriptionOverride[]
+  order     Order                  @relation(fields: [orderId], references: [id])
+  items     PrescriptionItem[]
+  checks    RuleCheckResult[]
+  overrides PrescriptionOverride[]
 }
 
 model PrescriptionItem {
-  id             String  @id @default(cuid())
+  id             String       @id @default(cuid())
   prescriptionId String
   drugProductId  String
   dosePerTime    Float
@@ -982,6 +999,10 @@ model PrescriptionItem {
   days           Int
   route          String
   usageCode      String?
+  dispenseType   DispenseType @default(IN_HOUSE) // 院内/院外 — FR-RX-01
+  isTemporary    Boolean      @default(false) // 臨時処方
+  isOnePackage   Boolean      @default(false) // 一包化指示
+  isOffLabel     Boolean      @default(false) // 適応外フラグ
   comment        String?
   prescription   Prescription @relation(fields: [prescriptionId], references: [id])
   drug           DrugProduct  @relation(fields: [drugProductId], references: [id])
@@ -1007,16 +1028,63 @@ model RuleCheckResult {
 }
 
 model PrescriptionOverride {
-  id                String   @id @default(cuid())
-  prescriptionId    String
-  ruleCheckResultId String
-  overriddenByUserId String
-  reason            String
+  id                  String       @id @default(cuid())
+  prescriptionId      String
+  ruleCheckResultId   String
+  overriddenByUserId  String
+  reason              String
   countersignByUserId String?
-  createdAt         DateTime @default(now())
-  prescription      Prescription @relation(fields: [prescriptionId], references: [id])
+  createdAt           DateTime     @default(now())
+  prescription        Prescription @relation(fields: [prescriptionId], references: [id])
 
   @@index([prescriptionId])
+}
+
+// 検査結果 (FR-LAB-01) — 数値/基準値判定/採取日 + トレンド source.
+// APPEND-ONLY: db/triggers.sql blocks UPDATE/DELETE (検査結果は確定後不変).
+// Corrections issue a new resulted row; status carries FINAL/PRELIMINARY/CORRECTED.
+model LabResult {
+  id           String          @id @default(cuid())
+  patientId    String
+  encounterId  String?
+  examMasterId String?
+  orderId      String?
+  value        Float?
+  valueText    String?
+  unit         String?
+  refLow       Float?
+  refHigh      Float?
+  flag         String? // H | L | HH | LL | abnormal flag
+  collectedAt  DateTime?
+  resultedAt   DateTime?
+  status       String          @default("FINAL") // FINAL | PRELIMINARY | CORRECTED
+  source       DrugDataSource?
+  provenance   Json?
+  createdAt    DateTime        @default(now())
+
+  patient    Patient     @relation(fields: [patientId], references: [id])
+  encounter  Encounter?  @relation(fields: [encounterId], references: [id])
+  examMaster ExamMaster? @relation(fields: [examMasterId], references: [id])
+  order      Order?      @relation(fields: [orderId], references: [id])
+
+  @@index([patientId, examMasterId, collectedAt])
+}
+
+// 警告無効化設定 (FR-RXSAFE-05 / G13). 処置行為・医薬品・チェック種類・レベル単位で
+// 警告を抑制し表示先(カルテ/要確認レセプト)を制御。更新可のため append-only 対象外。
+// ALLERGY / ABSOLUTE は抑制対象外 (アプリ層で担保)。
+model RuleSuppression {
+  id              String         @id @default(cuid())
+  clinicId        String?
+  scope           String // PROCEDURE | DRUG | DRUG_CLASS | CHECK_TYPE
+  targetKey       String // 対象キー (procedure code / drug id / class / checkType)
+  checkType       RuleCheckType?
+  minLevel        String? // WARNING 以上を抑制する閾値
+  showIn          String         @default("CHART") // CHART | RECEIPT_REVIEW
+  createdByUserId String?
+  createdAt       DateTime       @default(now())
+
+  @@index([clinicId, scope])
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1024,33 +1092,33 @@ model PrescriptionOverride {
 // ─────────────────────────────────────────────────────────────────────────────
 
 model DrugProduct {
-  id              String   @id @default(cuid())
-  receiptCode     String   @unique // レセプト電算 医薬品コード
-  yjCode          String?
-  hotCode         String?
-  gs1Code         String?
-  gtinUnit        String?
-  brandName       String
-  brandNameKana   String?
-  genericName     String?
-  strengthValue   Float?
-  strengthUnit    String?
-  dosageForm      String
+  id                  String    @id @default(cuid())
+  receiptCode         String    @unique // レセプト電算 医薬品コード
+  yjCode              String?
+  hotCode             String?
+  gs1Code             String?
+  gtinUnit            String?
+  brandName           String
+  brandNameKana       String?
+  genericName         String?
+  strengthValue       Float?
+  strengthUnit        String?
+  dosageForm          String
   administrationRoute String // 内服 | 外用 | 注射 | その他
-  unitCode        String?
-  nhiPrice        Float?
-  nhiPriceDate    DateTime?
-  isGeneric       Boolean  @default(false)
-  isNarcotic      Boolean  @default(false)
-  isPsychotropic  Boolean  @default(false)
-  isPoison        Boolean  @default(false)
-  isPowerfulDrug  Boolean  @default(false)
-  isBiological    Boolean  @default(false)
-  atcCode         String?
-  marketingStatus String   @default("ON_MARKET")
+  unitCode            String?
+  nhiPrice            Float?
+  nhiPriceDate        DateTime?
+  isGeneric           Boolean   @default(false)
+  isNarcotic          Boolean   @default(false)
+  isPsychotropic      Boolean   @default(false)
+  isPoison            Boolean   @default(false)
+  isPowerfulDrug      Boolean   @default(false)
+  isBiological        Boolean   @default(false)
+  atcCode             String?
+  marketingStatus     String    @default("ON_MARKET")
   sourceMasterVersion String
-  provenance      Json // {source, sourceFile, importedAt, masterVersion}
-  createdAt       DateTime @default(now())
+  provenance          Json // {source, sourceFile, importedAt, masterVersion}
+  createdAt           DateTime  @default(now())
 
   ingredients DrugProductIngredient[]
   rxItems     PrescriptionItem[]
@@ -1061,25 +1129,25 @@ model DrugProduct {
 }
 
 model DrugIngredient {
-  id               String  @id @default(cuid())
-  ingredientCode   String  @unique
-  ingredientName   String
+  id                 String                  @id @default(cuid())
+  ingredientCode     String                  @unique
+  ingredientName     String
   ingredientNameKana String?
-  ingredientNameEn String?
-  keggDrugId       String? // reference only — never used for judgement
-  saltVariantOfId  String?
-  saltVariantOf    DrugIngredient?  @relation("SaltVariant", fields: [saltVariantOfId], references: [id])
-  saltVariants     DrugIngredient[] @relation("SaltVariant")
-  products         DrugProductIngredient[]
+  ingredientNameEn   String?
+  keggDrugId         String? // reference only — never used for judgement
+  saltVariantOfId    String?
+  saltVariantOf      DrugIngredient?         @relation("SaltVariant", fields: [saltVariantOfId], references: [id])
+  saltVariants       DrugIngredient[]        @relation("SaltVariant")
+  products           DrugProductIngredient[]
 }
 
 model DrugProductIngredient {
-  id            String  @id @default(cuid())
+  id            String         @id @default(cuid())
   drugProductId String
   ingredientId  String
   amountValue   Float?
   amountUnit    String?
-  isActive      Boolean @default(true)
+  isActive      Boolean        @default(true)
   product       DrugProduct    @relation(fields: [drugProductId], references: [id])
   ingredient    DrugIngredient @relation(fields: [ingredientId], references: [id])
 
@@ -1087,15 +1155,15 @@ model DrugProductIngredient {
 }
 
 model DrugCodeCrosswalk {
-  id             String  @id @default(cuid())
-  receiptCode    String
-  hotCode        String?
-  yjCode         String?
-  ingredientCode String?
-  matchMethod    String // exact | medis_table | manual
-  confidence     String // high | medium | low
+  id               String  @id @default(cuid())
+  receiptCode      String
+  hotCode          String?
+  yjCode           String?
+  ingredientCode   String?
+  matchMethod      String // exact | medis_table | manual
+  confidence       String // high | medium | low
   verifiedByUserId String?
-  provenance     Json
+  provenance       Json
 
   @@index([receiptCode])
 }
@@ -1103,103 +1171,103 @@ model DrugCodeCrosswalk {
 // ── Safety tables: provenance NOT NULL, source ∈ DrugDataSource (NO AI member) ──
 
 model DrugIndication {
-  id                  String         @id @default(cuid())
-  targetKind          DrugTargetKind
-  targetId            String
-  indicationText      String
-  icd10Codes          String[]       @default([])
-  isInsuranceApplicable Boolean      @default(true)
-  conditionNote       String?
-  source              DrugDataSource
-  sourceCitation      String
-  validFrom           DateTime       @default(now())
-  validTo             DateTime?
-  reviewedByUserId    String?
-  reviewedAt          DateTime?
-  isSeed              Boolean        @default(false)
-  isProvisional       Boolean        @default(false)
-  createdAt           DateTime       @default(now())
+  id                    String         @id @default(cuid())
+  targetKind            DrugTargetKind
+  targetId              String
+  indicationText        String
+  icd10Codes            String[]       @default([])
+  isInsuranceApplicable Boolean        @default(true)
+  conditionNote         String?
+  source                DrugDataSource
+  sourceCitation        String
+  validFrom             DateTime       @default(now())
+  validTo               DateTime?
+  reviewedByUserId      String?
+  reviewedAt            DateTime?
+  isSeed                Boolean        @default(false)
+  isProvisional         Boolean        @default(false)
+  createdAt             DateTime       @default(now())
 
   @@index([targetKind, targetId])
 }
 
 model DrugDosage {
-  id               String           @id @default(cuid())
-  targetKind       DrugTargetKind
-  targetId         String
-  population       DosagePopulation @default(ADULT)
-  route            String
-  usualDoseSingle  Float?
-  usualDoseDaily   Float?
-  maxDoseSingle    Float?
-  maxDoseDaily     Float?
-  maxDosePeriod    Float?
-  periodUnit       String?
-  weightBased      Boolean          @default(false)
-  dosePerKgSingle  Float?
-  dosePerKgDaily   Float?
-  ageMinDays       Int?
-  ageMaxDays       Int?
-  renalAdjustment  Json?
+  id                String           @id @default(cuid())
+  targetKind        DrugTargetKind
+  targetId          String
+  population        DosagePopulation @default(ADULT)
+  route             String
+  usualDoseSingle   Float?
+  usualDoseDaily    Float?
+  maxDoseSingle     Float?
+  maxDoseDaily      Float?
+  maxDosePeriod     Float?
+  periodUnit        String?
+  weightBased       Boolean          @default(false)
+  dosePerKgSingle   Float?
+  dosePerKgDaily    Float?
+  ageMinDays        Int?
+  ageMaxDays        Int?
+  renalAdjustment   Json?
   hepaticAdjustment Json?
-  dosageText       String?
-  source           DrugDataSource
-  sourceCitation   String
-  validFrom        DateTime         @default(now())
-  validTo          DateTime?
-  reviewedByUserId String?
-  reviewedAt       DateTime?
-  isSeed           Boolean          @default(false)
-  isProvisional    Boolean          @default(false)
-  createdAt        DateTime         @default(now())
+  dosageText        String?
+  source            DrugDataSource
+  sourceCitation    String
+  validFrom         DateTime         @default(now())
+  validTo           DateTime?
+  reviewedByUserId  String?
+  reviewedAt        DateTime?
+  isSeed            Boolean          @default(false)
+  isProvisional     Boolean          @default(false)
+  createdAt         DateTime         @default(now())
 
   @@index([targetKind, targetId])
 }
 
 model DrugContraindication {
-  id               String              @id @default(cuid())
-  targetKind       DrugTargetKind
-  targetId         String
-  severity         ContraSeverity
-  conditionType    ContraConditionType
-  icd10Codes       String[]            @default([])
-  ageMinDays       Int?
-  ageMaxDays       Int?
+  id                String              @id @default(cuid())
+  targetKind        DrugTargetKind
+  targetId          String
+  severity          ContraSeverity
+  conditionType     ContraConditionType
+  icd10Codes        String[]            @default([])
+  ageMinDays        Int?
+  ageMaxDays        Int?
   targetDrugOrClass Json?
-  conditionText    String
-  rationale        String?
-  source           DrugDataSource
-  sourceCitation   String
-  validFrom        DateTime            @default(now())
-  validTo          DateTime?
-  reviewedByUserId String?
-  reviewedAt       DateTime?
-  isSeed           Boolean             @default(false)
-  isProvisional    Boolean             @default(false)
-  createdAt        DateTime            @default(now())
+  conditionText     String
+  rationale         String?
+  source            DrugDataSource
+  sourceCitation    String
+  validFrom         DateTime            @default(now())
+  validTo           DateTime?
+  reviewedByUserId  String?
+  reviewedAt        DateTime?
+  isSeed            Boolean             @default(false)
+  isProvisional     Boolean             @default(false)
+  createdAt         DateTime            @default(now())
 
   @@index([targetKind, targetId])
 }
 
 model DrugInteraction {
-  id              String                 @id @default(cuid())
-  subjectKind     DrugTargetKind
-  subjectId       String
-  counterpartType InteractionCounterpart
-  counterpartRef  Json
-  severity        InteractionSeverity
-  mechanism       String?
-  clinicalEffect  String?
-  management      String?
-  source          DrugDataSource
-  sourceCitation  String
-  validFrom       DateTime               @default(now())
-  validTo         DateTime?
+  id               String                 @id @default(cuid())
+  subjectKind      DrugTargetKind
+  subjectId        String
+  counterpartType  InteractionCounterpart
+  counterpartRef   Json
+  severity         InteractionSeverity
+  mechanism        String?
+  clinicalEffect   String?
+  management       String?
+  source           DrugDataSource
+  sourceCitation   String
+  validFrom        DateTime               @default(now())
+  validTo          DateTime?
   reviewedByUserId String?
-  reviewedAt      DateTime?
-  isSeed          Boolean                @default(false)
-  isProvisional   Boolean                @default(false)
-  createdAt       DateTime               @default(now())
+  reviewedAt       DateTime?
+  isSeed           Boolean                @default(false)
+  isProvisional    Boolean                @default(false)
+  createdAt        DateTime               @default(now())
 
   @@index([subjectKind, subjectId])
 }
@@ -1223,26 +1291,28 @@ model DrugSafetyReviewLog {
 // ── Other masters ──
 
 model ExamMaster {
-  id           String  @id @default(cuid())
-  code         String  @unique
-  name         String
-  jlac10       String?
-  category     String
-  specimenType String?
-  refLow       Float?
-  refHigh      Float?
-  unit         String?
+  id                  String  @id @default(cuid())
+  code                String  @unique
+  name                String
+  jlac10              String?
+  category            String
+  specimenType        String?
+  refLow              Float?
+  refHigh             Float?
+  unit                String?
   sourceMasterVersion String
-  provenance   Json
+  provenance          Json
+
+  labResults LabResult[]
 }
 
 model DiseaseMaster {
-  id            String   @id @default(cuid())
-  code          String   @unique // MEDIS標準病名コード
-  name          String
-  icd10         String[] @default([])
-  isConfidential Boolean @default(false)
-  source        DrugDataSource
+  id                  String         @id @default(cuid())
+  code                String         @unique // MEDIS標準病名コード
+  name                String
+  icd10               String[]       @default([])
+  isConfidential      Boolean        @default(false)
+  source              DrugDataSource
   sourceMasterVersion String
 }
 
@@ -1289,23 +1359,23 @@ enum DiseaseOutcome {
 }
 
 model PatientDiagnosis {
-  id           String          @id @default(cuid())
-  patientId    String
-  encounterId  String?
-  masterCode   String?
-  displayName  String
-  icd10        String?
-  departmentId String?
-  isMain       Boolean         @default(false)
-  isSuspected  Boolean         @default(false)
-  acuteChronic String? // ACUTE | CHRONIC
-  startDate    DateTime        @default(now())
-  outcome      DiseaseOutcome?
-  outcomeDate  DateTime?
-  forBilling   Boolean         @default(true)
-  status       DiagnosisStatus @default(ACTIVE)
+  id               String          @id @default(cuid())
+  patientId        String
+  encounterId      String?
+  masterCode       String?
+  displayName      String
+  icd10            String?
+  departmentId     String?
+  isMain           Boolean         @default(false)
+  isSuspected      Boolean         @default(false)
+  acuteChronic     String? // ACUTE | CHRONIC
+  startDate        DateTime        @default(now())
+  outcome          DiseaseOutcome?
+  outcomeDate      DateTime?
+  forBilling       Boolean         @default(true)
+  status           DiagnosisStatus @default(ACTIVE)
   recordedByUserId String
-  createdAt    DateTime        @default(now())
+  createdAt        DateTime        @default(now())
 
   patient Patient @relation(fields: [patientId], references: [id])
 
@@ -1350,20 +1420,20 @@ model Referral {
 }
 
 model ClinicalDocument {
-  id          String   @id @default(cuid())
-  patientId   String?
-  encounterId String?
-  docType     String // 紹介状|同意書|説明書|退院サマリ|スキャン|院内文書
-  templateId  String?
-  title       String
-  format      String   @default("TEXT") // TEXT|WORD|PDF|SCAN_IMAGE
-  body        String?
-  storageUrl  String?
-  scannedPages Int?
-  ocrText     String?
-  version     Int      @default(1)
+  id              String   @id @default(cuid())
+  patientId       String?
+  encounterId     String?
+  docType         String // 紹介状|同意書|説明書|退院サマリ|スキャン|院内文書
+  templateId      String?
+  title           String
+  format          String   @default("TEXT") // TEXT|WORD|PDF|SCAN_IMAGE
+  body            String?
+  storageUrl      String?
+  scannedPages    Int?
+  ocrText         String?
+  version         Int      @default(1)
   createdByUserId String
-  createdAt   DateTime @default(now())
+  createdAt       DateTime @default(now())
 
   @@index([patientId, docType])
 }

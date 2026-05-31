@@ -91,6 +91,10 @@ CREATE TRIGGER trg_immutable_override BEFORE UPDATE OR DELETE ON "PrescriptionOv
 DROP TRIGGER IF EXISTS trg_immutable_enc_transition ON "EncounterStatusTransition";
 CREATE TRIGGER trg_immutable_enc_transition BEFORE UPDATE OR DELETE ON "EncounterStatusTransition"
   FOR EACH ROW EXECUTE FUNCTION medixus_immutable();
+-- 検査結果は確定後不変 (FR-LAB-01・真正性). 訂正は新規 resulted 行で表現。
+DROP TRIGGER IF EXISTS trg_immutable_lab_result ON "LabResult";
+CREATE TRIGGER trg_immutable_lab_result BEFORE UPDATE OR DELETE ON "LabResult"
+  FOR EACH ROW EXECUTE FUNCTION medixus_immutable();
 
 -- ── 2. Tamper-evident audit hash-chain ───────────────────────────────────────
 -- 別紙3 #25-30. Each row's hash binds the previous row's hash (sha256).

@@ -26,6 +26,8 @@ const POLICIES: Record<string, Policy> = {
   RuleCheckResult: { allowUpdate: [] },
   PrescriptionOverride: { allowUpdate: [] },
   EncounterStatusTransition: { allowUpdate: [] },
+  // 検査結果は確定後不変 (FR-LAB-01). 訂正は新規 resulted 行で。
+  LabResult: { allowUpdate: [] },
 };
 
 export class AppendOnlyViolation extends Error {
