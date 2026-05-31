@@ -3,6 +3,7 @@ import { revalidatePath } from 'next/cache';
 import { prisma } from '@medixus/db';
 import { writeAudit } from '@medixus/audit';
 import { requireSession } from '@/lib/session';
+import { NURSING_PLAN_DOCTYPE, PRESSURE_ULCER_DOCTYPE } from './constants';
 
 /**
  * WP-WRD2 看護計画・褥瘡DESIGN-R の保存（FR-WRD-02）。
@@ -23,8 +24,8 @@ async function auditSafe(args: Parameters<typeof writeAudit>[0]): Promise<void> 
   }
 }
 
-export const NURSING_PLAN_DOCTYPE = '看護計画';
-export const PRESSURE_ULCER_DOCTYPE = '褥瘡DESIGN-R';
+// docType 定数（NURSING_PLAN_DOCTYPE / PRESSURE_ULCER_DOCTYPE）は './constants' に移設。
+// ('use server' ファイルでは async 関数以外を export できないため。)
 
 /** 看護計画（看護診断→期待される成果→看護介入→評価）を追記保存。 */
 export async function addNursingPlan(formData: FormData): Promise<void> {

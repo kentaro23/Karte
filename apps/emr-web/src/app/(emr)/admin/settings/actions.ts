@@ -20,8 +20,8 @@ import { requireSession } from '@/lib/session';
  * フェイルソフトにし、フォーム送信が 500 にならないようにする。
  */
 
-/** 抑止不可のチェック種類（安全側で固定）。 */
-export const NON_SUPPRESSIBLE_CHECK_TYPES = ['ALLERGY'] as const;
+// 抑止不可のチェック種類（NON_SUPPRESSIBLE_CHECK_TYPES）は './constants' に移設。
+// ('use server' ファイルでは async 関数以外を export できないため。)
 const VALID_SCOPES = ['PROCEDURE', 'DRUG', 'DRUG_CLASS', 'CHECK_TYPE'] as const;
 const VALID_LEVELS = ['WARNING', 'BLOCKED'] as const;
 const VALID_SHOW_IN = ['CHART', 'RECEIPT_REVIEW'] as const;
@@ -44,8 +44,9 @@ export type SuppressionResult = { ok: boolean; error?: string };
 /**
  * 抑止設定が安全側ルールに反していないか検証する純関数。
  * ALLERGY を直接対象にする、または絶対禁忌のみを抑止する設定は拒否する。
+ * 'use server' ファイル内では非 export（本ファイルの createSuppression からのみ使用）。
  */
-export function validateSuppression(input: {
+function validateSuppression(input: {
   scope: string;
   checkType: string | null;
   targetKey: string;

@@ -2,11 +2,8 @@ import { prisma } from '@medixus/db';
 import { Panel, PanelHeader, Badge, Icon, Button, Field, Select, Input, EmptyState } from '@medixus/ui';
 import { PageBody, PageHeader } from '@/components/page';
 import { getSession } from '@/lib/session';
-import {
-  createSuppression,
-  deleteSuppression,
-  NON_SUPPRESSIBLE_CHECK_TYPES,
-} from './actions';
+import { createSuppression, deleteSuppression } from './actions';
+import { NON_SUPPRESSIBLE_CHECK_TYPES } from './constants';
 
 const GROUPS: { title: string; icon: 'lock' | 'users' | 'audit' | 'settings'; rows: [string, string, 'green' | 'blue' | 'amber'][] }[] = [
   {

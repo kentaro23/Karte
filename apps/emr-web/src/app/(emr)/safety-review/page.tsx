@@ -2,7 +2,8 @@ import { prisma } from '@medixus/db';
 import { Panel, PanelHeader, Badge, Icon, Button, EmptyState } from '@medixus/ui';
 import { PageBody, PageHeader } from '@/components/page';
 import { getSession } from '@/lib/session';
-import { promoteSafetyData, type SafetyEntityTable } from './actions';
+import { promoteSafetyData } from './actions';
+import { type SafetyEntityTable } from './constants';
 
 /* ── 型（フロントのみモードのフォールバックにも使う） ───────────────────── */
 type SafetyRow = {

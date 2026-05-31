@@ -3,6 +3,7 @@ import { revalidatePath } from 'next/cache';
 import { prisma, type Prisma } from '@medixus/db';
 import { writeAudit } from '@medixus/audit';
 import { requireSession } from '@/lib/session';
+import { SAFETY_ENTITY_TABLES, type SafetyEntityTable } from './constants';
 
 /**
  * 安全データ 薬剤師レビュー昇格 — FR-RXSAFE-06 / ギャップ G13b。
@@ -19,13 +20,8 @@ import { requireSession } from '@/lib/session';
  * フェイルソフトにする。
  */
 
-export const SAFETY_ENTITY_TABLES = [
-  'DrugIndication',
-  'DrugDosage',
-  'DrugContraindication',
-  'DrugInteraction',
-] as const;
-export type SafetyEntityTable = (typeof SAFETY_ENTITY_TABLES)[number];
+// 対象テーブル定義（SAFETY_ENTITY_TABLES / SafetyEntityTable）は './constants' に移設。
+// ('use server' ファイルでは async 関数以外の値を export できないため。)
 
 function isSafetyTable(t: string): t is SafetyEntityTable {
   return (SAFETY_ENTITY_TABLES as readonly string[]).includes(t);

@@ -3,6 +3,7 @@ import { revalidatePath } from 'next/cache';
 import { prisma, type JobType } from '@medixus/db';
 import { writeAudit } from '@medixus/audit';
 import { requireSession } from '@/lib/session';
+import { JOB_TYPES } from './constants';
 
 /**
  * 利用者管理 — FR-SEC-06（維持） / 174:169。
@@ -28,26 +29,17 @@ import { requireSession } from '@/lib/session';
  * ならないようにする。
  */
 
-/** 登録可能な職種（`JobType` enum と同一。UI のプルダウンと共有）。 */
-export const JOB_TYPES: { value: JobType; label: string }[] = [
-  { value: 'DOCTOR', label: '医師' },
-  { value: 'RESIDENT', label: '研修医' },
-  { value: 'NURSE', label: '看護師' },
-  { value: 'PHARMACIST', label: '薬剤師' },
-  { value: 'CLERK', label: '医事課' },
-  { value: 'TECHNOLOGIST', label: '技師' },
-  { value: 'THERAPIST', label: '療法士' },
-  { value: 'DIETITIAN', label: '管理栄養士' },
-  { value: 'MANAGER', label: '管理者' },
-  { value: 'ADMIN', label: 'システム管理者' },
-];
-
+// 職種リスト（JOB_TYPES）は './constants' に移設。
+// ('use server' ファイルでは async 関数以外を export できないため。)
 const VALID_JOB_TYPES = JOB_TYPES.map((j) => j.value);
 
 export type UserActionResult = { ok: boolean; error?: string };
 
-/** 入力検証（純関数・テスト可能）。 */
-export function validateNewUser(input: {
+/**
+ * 入力検証（純関数）。
+ * 'use server' ファイル内では非 export（本ファイルの createUser からのみ使用）。
+ */
+function validateNewUser(input: {
   staffNo: string;
   loginId: string;
   name: string;

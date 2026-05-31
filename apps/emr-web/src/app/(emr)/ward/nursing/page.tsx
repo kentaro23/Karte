@@ -4,12 +4,8 @@ import { age } from '@medixus/domain';
 import { Panel, PanelHeader, Icon, Button, Field, Input, EmptyState, Badge } from '@medixus/ui';
 import { PageBody, PageHeader } from '@/components/page';
 import { addNursing } from '../actions';
-import {
-  addNursingPlan,
-  addPressureUlcerScore,
-  NURSING_PLAN_DOCTYPE,
-  PRESSURE_ULCER_DOCTYPE,
-} from './actions';
+import { addNursingPlan, addPressureUlcerScore } from './actions';
+import { NURSING_PLAN_DOCTYPE, PRESSURE_ULCER_DOCTYPE } from './constants';
 
 // 受付/カルテ同様、Prisma を読むため明示的に動的化。DB 未接続でもデモが描画される。
 export const dynamic = 'force-dynamic';

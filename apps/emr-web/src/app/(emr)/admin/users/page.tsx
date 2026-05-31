@@ -2,13 +2,8 @@ import { prisma, type JobType } from '@medixus/db';
 import { Panel, PanelHeader, Badge, Icon, Button, Field, Input, Select, EmptyState } from '@medixus/ui';
 import { PageBody, PageHeader } from '@/components/page';
 import { getSession } from '@/lib/session';
-import {
-  createUser,
-  setUserActive,
-  unlockUser,
-  resetPassword,
-  JOB_TYPES,
-} from './actions';
+import { createUser, setUserActive, unlockUser, resetPassword } from './actions';
+import { JOB_TYPES } from './constants';
 
 /** 利用者・権限管理 — 174項 169-170 / FR-SEC-06。利用者登録/変更/無効化・状態・最終ログイン・パスワード更新履歴。 */
 export const dynamic = 'force-dynamic';

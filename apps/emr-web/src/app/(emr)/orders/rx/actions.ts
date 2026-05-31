@@ -80,8 +80,10 @@ function isAsNeeded(usage: string): boolean {
  * FR-RXSAFE-03 必須項目 保存ブロック（純検証 — UI と同一規則）。
  * 院外内服で投与日数が未入力(<=0)の行を不備として返す。
  * 用法未選択も不備（用法は処方箋に必須）。
+ * 'use server' ファイル内では async 以外を export できないため非 export 関数とする
+ * （本ファイル内の issueRxOrder からのみ使用）。
  */
-export function validateRxLines(lines: RxLineInput[]): string[] {
+function validateRxLines(lines: RxLineInput[]): string[] {
   const blocked: string[] = [];
   for (const l of lines) {
     if (!l.usage || !l.usage.trim()) {
