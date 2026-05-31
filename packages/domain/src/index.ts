@@ -3,3 +3,8 @@ export * from './clinical-note.js';
 export * from './order.js';
 export * from './patient-window.js';
 export * from './ids.js';
+export * from './diagnosis.js';
+export * from './lab.js';
+export * from './referral-status.js';
+export * from './order-detail.js';
+export * from './billing.js';

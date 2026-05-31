@@ -3,15 +3,22 @@
  * (＋妊婦授乳・年齢). 別紙1 §6.1 / 174項 59-61.
  *
  * Deterministic: every judgement is derived ONLY from imported/verified safety
- * rows (DrugContraindication/Interaction/Dosage) whose `source ∈ DrugDataSource`
- * (no AI member). Each finding records the row's `sourceCitation` for 真正性.
- * DISEASE_CONTRA (病名×添付文書) is Phase 2 (requires Diagnosis) — intentionally
- * NOT guessed here.
+ * rows (DrugContraindication/Interaction/Dosage/Indication) whose
+ * `source ∈ DrugDataSource` (no AI member). Each finding records the row's
+ * `sourceCitation` for 真正性.
+ * DISEASE_CONTRA (適応症 = 病名×添付文書) is derived from DrugIndication.icd10Codes
+ * × PatientDiagnosis (有効病名) — deterministic, never guessed (see disease-contra.ts).
  */
 import { prisma } from '@medixus/db';
 import { age, ageInDays } from '@medixus/domain';
 import { aggregate, type Finding, type RuleResult } from '@medixus/rule-engine';
 import { evaluateDose } from './dose.js';
+import {
+  checkDiseaseIndication,
+  type IndicationRow,
+  type PatientDiagnosisForContra,
+  type RxItemForDiseaseContra,
+} from './disease-contra.js';
 import { findDuplicates, type RxItemForDup } from './duplicate.js';
 
 const sev = (s: 'ABSOLUTE' | 'RELATIVE'): RuleResult => (s === 'ABSOLUTE' ? 'BLOCKED' : 'WARNING');
@@ -20,6 +27,11 @@ export interface CheckSummary {
   overall: RuleResult;
   findings: Finding[];
   persistedIds: string[];
+  /**
+   * 適応症(DISEASE_CONTRA)チェックの結果のみを抽出した後方互換フィールド。
+   * これらの finding は `findings` にも含まれ、persist / aggregate 対象。
+   */
+  diseaseContra: Finding[];
 }
 
 export async function runPrescriptionChecks(prescriptionId: string): Promise<CheckSummary> {
@@ -77,7 +89,7 @@ export async function runPrescriptionChecks(prescriptionId: string): Promise<Che
   const productIds = items.map((i) => i.productId);
   const ingredientIds = [...new Set(items.flatMap((i) => i.ingredientIds))];
 
-  const [contra, inter, dosage] = await Promise.all([
+  const [contra, inter, dosage, indication, patientDx] = await Promise.all([
     prisma.drugContraindication.findMany({
       where: {
         validTo: null,
@@ -104,6 +116,19 @@ export async function runPrescriptionChecks(prescriptionId: string): Promise<Che
           { targetKind: 'INGREDIENT', targetId: { in: ingredientIds } },
         ],
       },
+    }),
+    prisma.drugIndication.findMany({
+      where: {
+        validTo: null,
+        OR: [
+          { targetKind: 'PRODUCT', targetId: { in: productIds } },
+          { targetKind: 'INGREDIENT', targetId: { in: ingredientIds } },
+        ],
+      },
+    }),
+    // 患者の有効病名 (適応症突合用). 取消(DELETED)・治癒(RESOLVED)は除外。
+    prisma.patientDiagnosis.findMany({
+      where: { patientId: rx.patientId, status: 'ACTIVE' },
     }),
   ]);
 
@@ -213,6 +238,28 @@ export async function runPrescriptionChecks(prescriptionId: string): Promise<Che
     }
   }
 
+  // ---- ⑥ 適応症 (DISEASE_CONTRA: 添付文書適応 × 有効病名) ----
+  // 各処方薬に紐づく適応症行を整形 (provenance を保持)。
+  const dxInput: PatientDiagnosisForContra[] = patientDx.map((d) => ({
+    icd10: d.icd10 ?? null,
+    displayName: d.displayName,
+    isSuspected: d.isSuspected,
+  }));
+  const diseaseInput: RxItemForDiseaseContra[] = items.map((it) => {
+    const inds: IndicationRow[] = indication
+      .filter((ind) => matchTarget(ind.targetKind, ind.targetId, it))
+      .map((ind) => ({
+        indicationText: ind.indicationText,
+        icd10Codes: ind.icd10Codes,
+        sourceCitation: ind.sourceCitation,
+        source: ind.source,
+        isProvisional: ind.isProvisional,
+      }));
+    return { itemId: it.itemId, drugName: it.drugName, indications: inds };
+  });
+  const diseaseContra = checkDiseaseIndication(diseaseInput, dxInput);
+  findings.push(...diseaseContra);
+
   // ---- persist (immutable RuleCheckResult rows) ----
   const masterVersion = rx.items[0]?.drug.sourceMasterVersion ?? 'unknown';
   const runId = `run_${Date.now()}`;
@@ -239,5 +286,5 @@ export async function runPrescriptionChecks(prescriptionId: string): Promise<Che
     data: { status: 'rule_checked' },
   });
 
-  return { overall: agg.overall, findings, persistedIds };
+  return { overall: agg.overall, findings, persistedIds, diseaseContra };
 }

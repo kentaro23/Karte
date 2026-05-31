@@ -36,3 +36,15 @@ export { PatientBar, type PatientBarData } from './patient-bar.js';
 export { PatientTabs, type OpenPatient } from './patient-tabs.js';
 export { ReceptionTable, type ReceptionRow } from './reception-table.js';
 export { SoapEditor } from './soap-editor.js';
+export { InlineEditCell, type InlineEditOption } from './inline-edit-cell.js';
+export { ColumnToggle, type ColumnToggleItem } from './column-toggle.js';
+export { TrendChart, type TrendPoint } from './trend-chart.js';
+export { SchemaCanvas, type SchemaStroke } from './schema-canvas.js';
+export {
+  CalendarGrid,
+  type CalendarSlot,
+  type CalendarColumn,
+  type SlotState,
+} from './calendar-grid.js';
+export { ThreeButtonDx, type DxKind } from './three-button-dx.js';
+export { OverrideDialog, type OverrideAction } from './override-dialog.js';
