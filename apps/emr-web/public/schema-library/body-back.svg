@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 360" width="240" height="360" role="img" aria-label="全身（背面）">
+  <rect width="240" height="360" fill="#ffffff"/>
+  <g fill="none" stroke="#5b6b7a" stroke-width="2" stroke-linejoin="round" stroke-linecap="round">
+    <!-- head (back) -->
+    <ellipse cx="120" cy="40" rx="26" ry="30"/>
+    <!-- neck -->
+    <path d="M108 66 L108 80 M132 66 L132 80"/>
+    <!-- shoulders & torso -->
+    <path d="M108 80 C80 84 70 92 62 100 L70 118"/>
+    <path d="M132 80 C160 84 170 92 178 100 L170 118"/>
+    <path d="M84 88 L84 196 C84 210 96 214 120 214 C144 214 156 210 156 196 L156 88"/>
+    <!-- spine -->
+    <path d="M120 84 L120 210" stroke-width="1.4" stroke-dasharray="3 4"/>
+    <!-- scapula hints -->
+    <path d="M100 104 q-8 16 4 28" stroke-width="1.4"/>
+    <path d="M140 104 q8 16 -4 28" stroke-width="1.4"/>
+    <!-- arms -->
+    <path d="M62 100 L48 175 L44 224"/>
+    <path d="M178 100 L192 175 L196 224"/>
+    <path d="M70 118 L60 178 L56 222"/>
+    <path d="M170 118 L180 178 L184 222"/>
+    <ellipse cx="50" cy="232" rx="9" ry="12"/>
+    <ellipse cx="190" cy="232" rx="9" ry="12"/>
+    <!-- legs -->
+    <path d="M100 214 L94 300 L92 340"/>
+    <path d="M140 214 L146 300 L148 340"/>
+    <path d="M120 214 L120 300"/>
+    <!-- feet (heels) -->
+    <path d="M92 340 L84 350 L100 350 Z"/>
+    <path d="M148 340 L156 350 L140 350 Z"/>
+  </g>
+  <text x="120" y="356" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#9aa6b2">全身（背面）</text>
+</svg>

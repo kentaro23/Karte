@@ -30,22 +30,47 @@ const STATUS_LABEL: Record<string, string> = {
   VOIDED: '取消',
 };
 
+export const dynamic = 'force-dynamic';
+
+type OrderRow = {
+  id: string;
+  orderNo: string;
+  orderType: string;
+  status: string;
+  isUrgent: boolean;
+  createdAt: Date;
+  patient: { patientNo: string; kanjiLastName: string; kanjiFirstName: string };
+};
+
 export default async function OrdersPage({
   searchParams,
 }: {
   searchParams: Promise<{ type?: string }>;
 }) {
   const sp = await searchParams;
-  const [orders, patients] = await Promise.all([
-    prisma.order.findMany({
-      orderBy: { createdAt: 'desc' },
-      take: 80,
-      include: {
-        patient: { select: { patientNo: true, kanjiLastName: true, kanjiFirstName: true } },
-      },
-    }),
-    prisma.patient.findMany({ orderBy: { createdAt: 'asc' }, take: 60 }),
-  ]);
+  // fail-soft: DB 未接続でも画面を描画（空一覧）。
+  let orders: OrderRow[] = [];
+  let patients: { id: string; patientNo: string; kanjiLastName: string; kanjiFirstName: string }[] =
+    [];
+  try {
+    [orders, patients] = await Promise.all([
+      prisma.order.findMany({
+        orderBy: { createdAt: 'desc' },
+        take: 80,
+        include: {
+          patient: { select: { patientNo: true, kanjiLastName: true, kanjiFirstName: true } },
+        },
+      }),
+      prisma.patient.findMany({
+        orderBy: { createdAt: 'asc' },
+        take: 60,
+        select: { id: true, patientNo: true, kanjiLastName: true, kanjiFirstName: true },
+      }),
+    ]);
+  } catch {
+    orders = [];
+    patients = [];
+  }
 
   return (
     <PageBody>

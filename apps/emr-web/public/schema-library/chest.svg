@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 260" width="240" height="260" role="img" aria-label="胸部（前面）">
+  <rect width="240" height="260" fill="#ffffff"/>
+  <g fill="none" stroke="#5b6b7a" stroke-width="2" stroke-linejoin="round" stroke-linecap="round">
+    <!-- neck base / shoulders -->
+    <path d="M96 24 L96 40 M144 24 L144 40"/>
+    <path d="M96 40 C64 44 48 52 36 64 M144 40 C176 44 192 52 204 64"/>
+    <!-- thorax outline -->
+    <path d="M52 56 C52 56 60 44 96 40 L120 46 L144 40 C180 44 188 56 188 56
+             L182 150 C182 150 156 178 120 178 C84 178 58 150 58 150 Z"/>
+    <!-- clavicles -->
+    <path d="M70 60 Q96 70 118 64 M170 60 Q144 70 122 64" stroke-width="1.4"/>
+    <!-- sternum / midline -->
+    <path d="M120 64 L120 168" stroke-width="1" stroke-dasharray="4 4"/>
+    <!-- rib hints -->
+    <path d="M72 86 Q120 100 168 86" stroke-width="1.1"/>
+    <path d="M70 108 Q120 124 170 108" stroke-width="1.1"/>
+    <path d="M70 130 Q120 146 170 130" stroke-width="1.1"/>
+    <!-- nipples -->
+    <circle cx="90" cy="120" r="4"/>
+    <circle cx="150" cy="120" r="4"/>
+  </g>
+  <text x="120" y="254" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#9aa6b2">胸部（前面）</text>
+</svg>

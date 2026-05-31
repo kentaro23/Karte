@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 360" width="240" height="360" role="img" aria-label="全身（前面）">
+  <rect width="240" height="360" fill="#ffffff"/>
+  <g fill="none" stroke="#5b6b7a" stroke-width="2" stroke-linejoin="round" stroke-linecap="round">
+    <!-- head -->
+    <ellipse cx="120" cy="40" rx="26" ry="30"/>
+    <!-- neck -->
+    <path d="M108 66 L108 80 M132 66 L132 80"/>
+    <!-- shoulders & torso -->
+    <path d="M108 80 C80 84 70 92 62 100 L70 118"/>
+    <path d="M132 80 C160 84 170 92 178 100 L170 118"/>
+    <path d="M84 88 L84 196 C84 210 96 214 120 214 C144 214 156 210 156 196 L156 88"/>
+    <!-- arms -->
+    <path d="M62 100 L48 175 L44 224"/>
+    <path d="M178 100 L192 175 L196 224"/>
+    <path d="M70 118 L60 178 L56 222"/>
+    <path d="M170 118 L180 178 L184 222"/>
+    <!-- hands -->
+    <ellipse cx="50" cy="232" rx="9" ry="12"/>
+    <ellipse cx="190" cy="232" rx="9" ry="12"/>
+    <!-- legs -->
+    <path d="M100 214 L94 300 L92 340"/>
+    <path d="M140 214 L146 300 L148 340"/>
+    <path d="M120 214 L120 300"/>
+    <!-- feet -->
+    <path d="M92 340 L80 348 L96 350 Z"/>
+    <path d="M148 340 L160 348 L144 350 Z"/>
+    <!-- face landmarks (faint) -->
+    <path d="M110 38 a3 3 0 1 0 0.1 0" stroke-width="1.4"/>
+    <path d="M130 38 a3 3 0 1 0 0.1 0" stroke-width="1.4"/>
+    <path d="M114 54 q6 5 12 0" stroke-width="1.4"/>
+  </g>
+  <text x="120" y="356" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#9aa6b2">全身（前面）</text>
+</svg>

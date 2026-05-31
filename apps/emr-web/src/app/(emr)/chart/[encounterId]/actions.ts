@@ -2,7 +2,14 @@
 import { revalidatePath } from 'next/cache';
 import { prisma, type JobType } from '@medixus/db';
 import { writeAudit } from '@medixus/audit';
-import { planAmendment, formatOrderNo, type SoapBlock } from '@medixus/domain';
+import {
+  planAmendment,
+  formatOrderNo,
+  buildDoOrder,
+  type SoapBlock,
+  type SoapKind,
+  type OrderType,
+} from '@medixus/domain';
 import { runPrescriptionChecks } from '@medixus/order-checks';
 import { requireSession } from '@/lib/session';
 
@@ -352,4 +359,82 @@ export async function removeDiagnosis(encounterId: string, id: string) {
   });
   revalidatePath(`/chart/${encounterId}`);
   return { ok: true };
+}
+
+/* ── 過去カルテ参照・セクションDo（FR-CHT-05） ── */
+
+/**
+ * 前回SOAPのセクションを当日カルテへコピーした事実を監査に残す（出所トレース）。
+ * 実際の本文反映はエディタ側の blocks へ行い `saveSoap` で永続化する。
+ */
+export async function traceSectionDo(
+  encounterId: string,
+  source: { noteId: string | null; date: string; kind: SoapKind },
+) {
+  try {
+    const s = await requireSession();
+    const enc = await prisma.encounter.findUniqueOrThrow({ where: { id: encounterId } });
+    await writeAudit({
+      actorUserId: s.userId,
+      patientId: enc.patientId,
+      action: 'CHART_WRITE',
+      resource: 'ClinicalNote.sectionDo',
+      resourceId: source.noteId ?? encounterId,
+      detail: { kind: source.kind, fromNoteId: source.noteId, fromDate: source.date },
+    });
+    return { ok: true };
+  } catch (err) {
+    console.error('[traceSectionDo] failed:', err);
+    return { ok: false };
+  }
+}
+
+/**
+ * 前回オーダをDoで当日に複製（buildDoOrder で内容コピー、新規DRAFTオーダとして起票）。
+ * 出所は `doSourceOrderId` に保持しトレース可能にする。
+ */
+export async function doOrderSection(encounterId: string, sourceOrderId: string) {
+  try {
+    const s = await requireSession();
+    const enc = await prisma.encounter.findUniqueOrThrow({ where: { id: encounterId } });
+    const src = await prisma.order.findUniqueOrThrow({ where: { id: sourceOrderId } });
+    const cloned = buildDoOrder({
+      id: src.id,
+      orderType: src.orderType as OrderType,
+      departmentId: enc.departmentId,
+      detail: src.detail,
+    });
+    const dayStart = new Date();
+    dayStart.setHours(0, 0, 0, 0);
+    const seq = (await prisma.order.count({ where: { createdAt: { gte: dayStart } } })) + 1;
+    const order = await prisma.order.create({
+      data: {
+        orderNo: formatOrderNo(new Date(), seq),
+        patientId: enc.patientId,
+        encounterId,
+        orderType: cloned.orderType,
+        classification: src.classification,
+        departmentId: cloned.departmentId,
+        ordererUserId: s.userId,
+        status: cloned.status,
+        detail: cloned.detail as object,
+        doSourceOrderId: cloned.doSourceOrderId,
+        version: cloned.version,
+        isLatest: cloned.isLatest,
+      },
+    });
+    await writeAudit({
+      actorUserId: s.userId,
+      patientId: enc.patientId,
+      action: 'ORDER_ISSUE',
+      resource: 'Order.do',
+      resourceId: order.id,
+      detail: { doSourceOrderId: sourceOrderId, orderType: cloned.orderType },
+    });
+    revalidatePath(`/chart/${encounterId}`);
+    return { ok: true, orderId: order.id, orderNo: order.orderNo };
+  } catch (err) {
+    console.error('[doOrderSection] failed:', err);
+    return { ok: false, error: 'Doオーダの起票に失敗しました' };
+  }
 }

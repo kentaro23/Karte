@@ -1,18 +1,107 @@
 import Link from 'next/link';
 import { prisma } from '@medixus/db';
 import { age } from '@medixus/domain';
-import { Panel, PanelHeader, Badge, Icon, Button, EmptyState } from '@medixus/ui';
+import { Panel, PanelHeader, Icon, EmptyState, Badge } from '@medixus/ui';
 import { PageBody, PageHeader } from '@/components/page';
-import { addDiagnosis, setOutcome } from './actions';
+import {
+  DiagnosesSearchClient,
+  type MasterRow,
+  type DiagnosisRow,
+  type DeptRow,
+} from './search-client';
 
-const OUTCOME_LABEL: Record<string, string> = {
-  CURED: '治癒',
-  IMPROVED: '軽快',
-  UNCHANGED: '不変',
-  TRANSFERRED: '転医',
-  DECEASED: '死亡',
-  STOPPED: '中止',
+// 病名登録・転帰・エクスポートは受診/患者コンテキストに依存するため常に動的描画。
+export const dynamic = 'force-dynamic';
+
+type PatientLite = {
+  id: string;
+  patientNo: string;
+  kanjiLastName: string;
+  kanjiFirstName: string;
+  dateOfBirth: Date;
 };
+
+/** DB未接続でも画面が出るよう、取得はすべて try/catch で fail-soft・null安全。 */
+async function loadData(patientId: string | undefined, q: string) {
+  const out: {
+    recent: PatientLite[];
+    master: MasterRow[];
+    patient: PatientLite | null;
+    diagnoses: DiagnosisRow[];
+    departments: DeptRow[];
+    demo: boolean;
+  } = { recent: [], master: [], patient: null, diagnoses: [], departments: [], demo: false };
+
+  try {
+    const [recent, master, departments] = await Promise.all([
+      prisma.patient.findMany({
+        orderBy: { createdAt: 'asc' },
+        take: 12,
+        select: {
+          id: true,
+          patientNo: true,
+          kanjiLastName: true,
+          kanjiFirstName: true,
+          dateOfBirth: true,
+        },
+      }),
+      q
+        ? prisma.diseaseMaster.findMany({
+            where: { OR: [{ name: { contains: q } }, { code: { contains: q } }] },
+            take: 60,
+            select: { id: true, code: true, name: true, icd10: true },
+          })
+        : prisma.diseaseMaster.findMany({
+            take: 60,
+            orderBy: { name: 'asc' },
+            select: { id: true, code: true, name: true, icd10: true },
+          }),
+      prisma.department.findMany({ orderBy: { name: 'asc' }, select: { id: true, name: true } }),
+    ]);
+    out.recent = recent;
+    out.master = master;
+    out.departments = departments;
+
+    if (patientId) {
+      const patient = await prisma.patient.findUnique({
+        where: { id: patientId },
+        select: {
+          id: true,
+          patientNo: true,
+          kanjiLastName: true,
+          kanjiFirstName: true,
+          dateOfBirth: true,
+        },
+      });
+      out.patient = patient;
+      if (patient) {
+        const diagnoses = await prisma.patientDiagnosis.findMany({
+          where: { patientId: patient.id },
+          orderBy: [{ status: 'asc' }, { startDate: 'desc' }],
+        });
+        out.diagnoses = diagnoses.map((d) => ({
+          id: d.id,
+          displayName: d.displayName,
+          masterCode: d.masterCode,
+          icd10: d.icd10,
+          isMain: d.isMain,
+          isSuspected: d.isSuspected,
+          acuteChronic: d.acuteChronic,
+          departmentId: d.departmentId,
+          startDate: d.startDate.toISOString(),
+          outcome: d.outcome,
+          outcomeDate: d.outcomeDate ? d.outcomeDate.toISOString() : null,
+          forBilling: d.forBilling,
+          status: d.status,
+        }));
+      }
+    }
+  } catch (err) {
+    console.error('[diagnoses] loadData failed (fail-soft):', err);
+    out.demo = true;
+  }
+  return out;
+}
 
 export default async function DiagnosesPage({
   searchParams,
@@ -21,178 +110,70 @@ export default async function DiagnosesPage({
 }) {
   const sp = await searchParams;
   const q = (sp.q ?? '').trim();
-
-  const recent = await prisma.patient.findMany({ orderBy: { createdAt: 'asc' }, take: 12 });
-  const master = q
-    ? await prisma.diseaseMaster.findMany({
-        where: { OR: [{ name: { contains: q } }, { code: { contains: q } }] },
-        take: 30,
-      })
-    : await prisma.diseaseMaster.findMany({ take: 20, orderBy: { name: 'asc' } });
-
-  const patient = sp.patientId
-    ? await prisma.patient.findUnique({ where: { id: sp.patientId } })
-    : null;
-  const diagnoses = patient
-    ? await prisma.patientDiagnosis.findMany({
-        where: { patientId: patient.id },
-        orderBy: [{ status: 'asc' }, { startDate: 'desc' }],
-      })
-    : [];
+  const { recent, master, patient, diagnoses, departments, demo } = await loadData(sp.patientId, q);
 
   return (
     <PageBody>
       <PageHeader
         title="病名・転帰"
-        desc="標準病名/ICD10検索、主病名・疑い・急性慢性の登録、転帰管理（174項 19）"
+        desc="標準病名（MEDIS＋ICD-10）をキーワード検索し、確定/主病/疑い の三連ボタンでワンクリック登録。修飾語プリ合成・主併・開始日・転帰・一括転帰・当月有効・エクスポート（174項 19 / FR-DX-01）"
         crumbs={['Medixus カルテ', '診療', '病名・転帰']}
+        actions={<Badge tone="blue">{master.length} 病名</Badge>}
       />
+
+      {demo && (
+        <Panel className="mb-4">
+          <p className="text-xs text-muted">
+            バックエンド未接続のため病名マスタ・患者は空です。画面操作は可能で、登録・転帰・エクスポートはデモ表示になります。
+          </p>
+        </Panel>
+      )}
+
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[280px_1fr]">
         <Panel>
           <PanelHeader title="患者選択" icon={<Icon name="patients" size={15} />} />
-          <ul className="flex flex-col gap-0.5">
-            {recent.map((p) => (
-              <li key={p.id}>
-                <Link
-                  href={`/diagnoses?patientId=${p.id}`}
-                  className={`block rounded px-2 py-1.5 text-xs hover:bg-soft ${
-                    patient?.id === p.id ? 'bg-accent-50 font-semibold text-accent-700' : ''
-                  }`}
-                >
-                  <span className="font-mono text-2xs text-muted">{p.patientNo}</span>{' '}
-                  {p.kanjiLastName} {p.kanjiFirstName}（{age(p.dateOfBirth)}）
-                </Link>
-              </li>
-            ))}
-          </ul>
+          {recent.length === 0 ? (
+            <p className="px-1 py-3 text-2xs text-muted">患者がいません（バックエンド未接続）</p>
+          ) : (
+            <ul className="flex flex-col gap-0.5">
+              {recent.map((p) => (
+                <li key={p.id}>
+                  <Link
+                    href={`/diagnoses?patientId=${p.id}`}
+                    className={`block rounded px-2 py-1.5 text-xs hover:bg-soft ${
+                      patient?.id === p.id ? 'bg-accent-50 font-semibold text-accent-700' : ''
+                    }`}
+                  >
+                    <span className="font-mono text-2xs text-muted">{p.patientNo}</span>{' '}
+                    {p.kanjiLastName} {p.kanjiFirstName}（{age(p.dateOfBirth)}）
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          )}
         </Panel>
 
-        <div className="flex flex-col gap-4">
-          {!patient ? (
-            <Panel>
-              <EmptyState
-                title="患者を選択してください"
-                hint="左の一覧から患者を選ぶと病名の登録・転帰管理ができます"
-                icon={<Icon name="chart" size={32} />}
-              />
-            </Panel>
-          ) : (
-            <>
-              <Panel>
-                <PanelHeader
-                  title={`${patient.kanjiLastName} ${patient.kanjiFirstName} の病名`}
-                  desc={`ID ${patient.patientNo} ・ ${age(patient.dateOfBirth)}歳`}
-                  icon={<Icon name="chart" size={15} />}
-                />
-                {diagnoses.length === 0 ? (
-                  <EmptyState title="登録病名はありません" />
-                ) : (
-                  <table className="w-full border-collapse text-sm">
-                    <thead>
-                      <tr className="bg-soft text-2xs uppercase text-muted">
-                        <th className="px-2 py-1.5 text-left">病名</th>
-                        <th className="px-2 py-1.5 text-left">ICD10</th>
-                        <th className="px-2 py-1.5 text-left">区分</th>
-                        <th className="px-2 py-1.5 text-left">開始</th>
-                        <th className="px-2 py-1.5 text-left">転帰</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {diagnoses.map((d) => (
-                        <tr key={d.id} className="border-t border-line">
-                          <td className="px-2 py-1.5">
-                            {d.displayName}
-                            {d.isMain && <Badge tone="green" className="ml-1">主病名</Badge>}
-                            {d.isSuspected && <Badge tone="amber" className="ml-1">疑い</Badge>}
-                          </td>
-                          <td className="px-2 py-1.5 font-mono text-xs">{d.icd10 ?? '—'}</td>
-                          <td className="px-2 py-1.5 text-xs">{d.acuteChronic ?? '—'}</td>
-                          <td className="px-2 py-1.5 text-xs">
-                            {d.startDate.toLocaleDateString('ja-JP')}
-                          </td>
-                          <td className="px-2 py-1.5">
-                            {d.outcome ? (
-                              <Badge tone={d.status === 'RESOLVED' ? 'gray' : 'blue'}>
-                                {OUTCOME_LABEL[d.outcome]}
-                              </Badge>
-                            ) : (
-                              <form action={setOutcome} className="flex items-center gap-1">
-                                <input type="hidden" name="id" value={d.id} />
-                                <select
-                                  name="outcome"
-                                  className="rounded border border-line px-1 py-0.5 text-2xs"
-                                >
-                                  {Object.entries(OUTCOME_LABEL).map(([k, v]) => (
-                                    <option key={k} value={k}>
-                                      {v}
-                                    </option>
-                                  ))}
-                                </select>
-                                <Button size="sm" variant="ghost" type="submit">
-                                  登録
-                                </Button>
-                              </form>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-              </Panel>
-
-              <Panel>
-                <PanelHeader title="病名登録（標準病名マスタ）" icon={<Icon name="plus" size={15} />} />
-                <form method="get" className="mb-3 flex gap-2">
-                  <input type="hidden" name="patientId" value={patient.id} />
-                  <input
-                    name="q"
-                    defaultValue={q}
-                    placeholder="病名 / ICD10 検索"
-                    className="w-72 rounded border border-line px-2.5 py-1.5 text-sm"
-                  />
-                  <Button type="submit" variant="secondary">
-                    検索
-                  </Button>
-                </form>
-                <div className="grid grid-cols-1 gap-1.5 md:grid-cols-2">
-                  {master.map((m) => (
-                    <form
-                      key={m.id}
-                      action={addDiagnosis}
-                      className="flex items-center justify-between rounded border border-line px-2.5 py-1.5 text-sm"
-                    >
-                      <input type="hidden" name="patientId" value={patient.id} />
-                      <input type="hidden" name="masterCode" value={m.code} />
-                      <input type="hidden" name="displayName" value={m.name} />
-                      <input type="hidden" name="icd10" value={m.icd10[0] ?? ''} />
-                      <span>
-                        {m.name}{' '}
-                        <span className="font-mono text-2xs text-muted">{m.icd10[0] ?? ''}</span>
-                      </span>
-                      <span className="flex items-center gap-2">
-                        <label className="flex items-center gap-0.5 text-2xs text-muted">
-                          <input type="checkbox" name="isMain" /> 主
-                        </label>
-                        <label className="flex items-center gap-0.5 text-2xs text-muted">
-                          <input type="checkbox" name="isSuspected" /> 疑
-                        </label>
-                        <Button size="sm" variant="primary" type="submit">
-                          追加
-                        </Button>
-                      </span>
-                    </form>
-                  ))}
-                  {master.length === 0 && (
-                    <p className="col-span-2 py-4 text-center text-xs text-muted">
-                      該当する標準病名がありません
-                    </p>
-                  )}
-                </div>
-              </Panel>
-            </>
-          )}
-        </div>
+        {!patient ? (
+          <Panel>
+            <EmptyState
+              title="患者を選択してください"
+              hint="左の一覧から患者を選ぶと病名の登録・転帰管理ができます"
+              icon={<Icon name="chart" size={32} />}
+            />
+          </Panel>
+        ) : (
+          <DiagnosesSearchClient
+            patientId={patient.id}
+            patientLabel={`${patient.kanjiLastName} ${patient.kanjiFirstName}（ID ${patient.patientNo}・${age(
+              patient.dateOfBirth,
+            )}歳）`}
+            master={master}
+            diagnoses={diagnoses}
+            departments={departments}
+            initialQuery={q}
+            demo={demo}
+          />
+        )}
       </div>
     </PageBody>
   );

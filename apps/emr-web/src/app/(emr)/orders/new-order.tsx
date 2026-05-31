@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation';
 import { ORDER_TYPE_LABEL, type OrderType } from '@medixus/domain';
 import { Panel, PanelHeader, Field, Input, Select, Button, Icon, Badge } from '@medixus/ui';
 import { createOrder } from './actions';
+import { OrderMasterSearch } from './master-search';
 
 const ITEM_LABEL: Partial<Record<OrderType, string>> = {
   LAB: '検査項目（例: 血算・生化学）',
@@ -31,6 +32,42 @@ const TYPES: OrderType[] = [
 ];
 
 export function NewOrderForm({
+  patients,
+  defaultType,
+}: {
+  patients: { id: string; label: string }[];
+  defaultType?: string;
+}) {
+  const [mode, setMode] = React.useState<'master' | 'simple'>('master');
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="inline-flex self-start overflow-hidden rounded border border-line text-xs">
+        {(
+          [
+            ['master', 'マスタ実検索'],
+            ['simple', '簡易入力'],
+          ] as const
+        ).map(([m, label]) => (
+          <button
+            key={m}
+            type="button"
+            onClick={() => setMode(m)}
+            className={`px-3 py-1 ${mode === m ? 'bg-accent-500 text-white' : 'bg-white text-ink'}`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      {mode === 'master' ? (
+        <OrderMasterSearch patients={patients} defaultType={defaultType} />
+      ) : (
+        <SimpleOrderForm patients={patients} defaultType={defaultType} />
+      )}
+    </div>
+  );
+}
+
+function SimpleOrderForm({
   patients,
   defaultType,
 }: {

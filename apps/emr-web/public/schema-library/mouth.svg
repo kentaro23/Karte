@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 200" width="240" height="200" role="img" aria-label="口腔・口元">
+  <rect width="240" height="200" fill="#ffffff"/>
+  <g fill="none" stroke="#5b6b7a" stroke-width="2" stroke-linejoin="round" stroke-linecap="round">
+    <!-- lips outline -->
+    <path d="M40 96 q30 -28 80 -10 q50 -18 80 10 q-20 22 -80 22 q-60 0 -80 -22 Z"/>
+    <!-- lip parting -->
+    <path d="M40 96 q80 22 160 0" stroke-width="1.6"/>
+    <path d="M120 86 q-6 6 0 10 M120 86 q6 6 0 10" stroke-width="1.2"/>
+    <!-- upper teeth (gum line + teeth) -->
+    <path d="M58 96 q62 -16 124 0" stroke-width="1.2"/>
+    <g stroke-width="1.2">
+      <path d="M76 92 L76 100"/>
+      <path d="M92 90 L92 100"/>
+      <path d="M108 89 L108 100"/>
+      <path d="M120 89 L120 100"/>
+      <path d="M132 89 L132 100"/>
+      <path d="M148 90 L148 100"/>
+      <path d="M164 92 L164 100"/>
+    </g>
+    <!-- lower teeth -->
+    <path d="M64 110 q56 14 112 0" stroke-width="1.2"/>
+    <g stroke-width="1.2">
+      <path d="M84 110 L84 118"/>
+      <path d="M104 112 L104 120"/>
+      <path d="M120 113 L120 121"/>
+      <path d="M136 112 L136 120"/>
+      <path d="M156 110 L156 118"/>
+    </g>
+  </g>
+  <text x="120" y="194" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#9aa6b2">口腔・口元</text>
+</svg>

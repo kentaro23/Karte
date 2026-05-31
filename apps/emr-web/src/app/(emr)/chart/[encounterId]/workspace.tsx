@@ -9,10 +9,9 @@ import {
   Tabs,
   Modal,
   Input,
-  SoapEditor,
   EmptyState,
 } from '@medixus/ui';
-import { type SoapBlock } from '@medixus/domain';
+import { SOAP_LABEL, type SoapBlock, type SoapKind, type TextSpan } from '@medixus/domain';
 import {
   saveSoap,
   lockNote,
@@ -22,9 +21,12 @@ import {
   searchDiseases,
   addChartDiagnosis,
   removeDiagnosis,
+  traceSectionDo,
+  doOrderSection,
   type RxItemInput,
 } from './actions';
 import { LabResultsPanel } from './labs';
+import { HistoryPanel, type PastEntry } from './history-panel';
 
 export interface ChartDx {
   id: string;
@@ -100,6 +102,7 @@ export function ChartWorkspace(props: {
   recommended: { id: string; dx: string }[];
   diagnoses: ChartDx[];
   prescriptions: Rx[];
+  pastEntries: PastEntry[];
 }) {
   const { encounterId } = props;
   const router = useRouter();
@@ -115,51 +118,102 @@ export function ChartWorkspace(props: {
   const [pending, start] = React.useTransition();
   const locked = props.latestNote?.status === 'LOCKED';
   const [filter, setFilter] = React.useState<'all' | 'latest'>('all');
+  const [leftTab, setLeftTab] = React.useState<'versions' | 'past'>('versions');
 
   const hist = props.history.filter((n) => (filter === 'latest' ? n.isLatest : true));
 
+  // 前回SOAPの1セクションを当日カルテへコピー（Do）。既存記載がある場合は追記。
+  const doSection = (kind: SoapKind, text: string, source: { date: string; noteId: string | null }) => {
+    if (locked) {
+      setMsg('ロック済みのため、改版モードで編集してください');
+      return;
+    }
+    setBlocks((bs) => {
+      const has = bs.some((b) => b.kind === kind);
+      const apply = (cur: string) => (cur.trim() ? `${cur}\n${text}` : text);
+      const next = bs.map((b) =>
+        b.kind === kind
+          ? { kind, spans: [{ text: apply(b.spans.map((s) => s.text).join('')) }] }
+          : b,
+      );
+      return has ? next : [...next, { kind, spans: [{ text }] }];
+    });
+    setMsg(`前回 ${kind} を当日カルテへコピーしました（出所: ${new Date(source.date).toLocaleDateString('ja-JP')}）`);
+    // 出所トレースを監査へ（DB無時は fail-soft）。
+    start(async () => {
+      await traceSectionDo(encounterId, { noteId: source.noteId, date: source.date, kind });
+    });
+  };
+
+  // 前回オーダをDoで当日に複製。
+  const doOrder = (orderId: string, label: string) => {
+    start(async () => {
+      const r = await doOrderSection(encounterId, orderId);
+      setMsg(r.ok ? `Doオーダを起票しました（${label}）` : (r.error ?? 'Doオーダ起票に失敗しました'));
+      if (r.ok) router.refresh();
+    });
+  };
+
   return (
     <div className="grid h-[calc(100vh-118px)] grid-cols-[260px_1fr_320px] gap-0">
-      {/* ── LEFT: 指示歴ナビゲータ ── */}
+      {/* ── LEFT: 指示歴ナビゲータ / 過去カルテ参照 ── */}
       <aside className="flex flex-col overflow-hidden border-r border-line bg-white">
-        <div className="flex items-center justify-between border-b border-line px-3 py-2">
-          <span className="text-xs font-bold text-ink">指示歴 / 版数</span>
-          <select
-            value={filter}
-            onChange={(e) => setFilter(e.target.value as 'all' | 'latest')}
-            className="rounded border border-line px-1.5 py-0.5 text-2xs"
-          >
-            <option value="all">全版</option>
-            <option value="latest">最新のみ</option>
-          </select>
+        <div className="flex items-center gap-1 border-b border-line px-2 py-1.5">
+          <Tabs
+            items={[
+              { key: 'versions', label: '版数' },
+              { key: 'past', label: '過去カルテ' },
+            ]}
+            value={leftTab}
+            onChange={(v) => setLeftTab(v as 'versions' | 'past')}
+            size="sm"
+            className="border-0"
+          />
         </div>
-        <div className="flex-1 overflow-auto p-2">
-          {hist.length === 0 && <EmptyState title="記載なし" />}
-          {hist.map((n) => (
-            <button
-              key={n.id}
-              onClick={() => setViewing(n)}
-              className="mb-1.5 block w-full rounded border-l-4 px-2 py-1.5 text-left text-xs hover:bg-soft"
-              style={{ borderColor: n.isLatest ? '#0b5f37' : '#bbb' }}
-            >
-              <div className="flex items-center gap-1">
-                <span className="font-semibold">第{n.version}版</span>
-                {n.isLatest ? (
-                  <Badge tone="green">最新</Badge>
-                ) : (
-                  <Badge tone="amber">旧版</Badge>
-                )}
-                {n.status === 'LOCKED' && <Badge tone="blue">ロック</Badge>}
-              </div>
-              <div className="mt-0.5 text-2xs text-muted">
-                {new Date(n.recordedDate).toLocaleString('ja-JP')}
-              </div>
-              {n.amendReason && (
-                <div className="text-2xs text-warn">改版: {n.amendReason}</div>
-              )}
-            </button>
-          ))}
-        </div>
+        {leftTab === 'versions' ? (
+          <>
+            <div className="flex items-center justify-between border-b border-line px-3 py-1.5">
+              <span className="text-2xs font-bold text-muted">指示歴 / 版数</span>
+              <select
+                value={filter}
+                onChange={(e) => setFilter(e.target.value as 'all' | 'latest')}
+                className="rounded border border-line px-1.5 py-0.5 text-2xs"
+              >
+                <option value="all">全版</option>
+                <option value="latest">最新のみ</option>
+              </select>
+            </div>
+            <div className="flex-1 overflow-auto p-2">
+              {hist.length === 0 && <EmptyState title="記載なし" />}
+              {hist.map((n) => (
+                <button
+                  key={n.id}
+                  onClick={() => setViewing(n)}
+                  className="mb-1.5 block w-full rounded border-l-4 px-2 py-1.5 text-left text-xs hover:bg-soft"
+                  style={{ borderColor: n.isLatest ? '#0b5f37' : '#bbb' }}
+                >
+                  <div className="flex items-center gap-1">
+                    <span className="font-semibold">第{n.version}版</span>
+                    {n.isLatest ? (
+                      <Badge tone="green">最新</Badge>
+                    ) : (
+                      <Badge tone="amber">旧版</Badge>
+                    )}
+                    {n.status === 'LOCKED' && <Badge tone="blue">ロック</Badge>}
+                  </div>
+                  <div className="mt-0.5 text-2xs text-muted">
+                    {new Date(n.recordedDate).toLocaleString('ja-JP')}
+                  </div>
+                  {n.amendReason && (
+                    <div className="text-2xs text-warn">改版: {n.amendReason}</div>
+                  )}
+                </button>
+              ))}
+            </div>
+          </>
+        ) : (
+          <HistoryPanel entries={props.pastEntries} onDoSection={doSection} onDoOrder={doOrder} busy={pending} />
+        )}
       </aside>
 
       {/* ── CENTER: 記載 ── */}
@@ -232,7 +286,7 @@ export function ChartWorkspace(props: {
             </div>
           )}
           <Panel>
-            <SoapEditor value={blocks} onChange={setBlocks} readOnly={false} />
+            <RichSoapEditor value={blocks} onChange={setBlocks} readOnly={locked} />
           </Panel>
         </div>
 
@@ -393,6 +447,237 @@ export function ChartWorkspace(props: {
           setMsg('シェーマを添付しました');
         }}
       />
+    </div>
+  );
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * リッチテキストSOAPエディタ（FR-CHT-02）
+ *   spans[].marks（color/bold/size）を保持して保存・再表示。箇条書きは行頭
+ *   「・」のテキスト変換で表現（型 TextSpan に収まり round-trip 安定）。
+ *   各セクションはセグメント（span）単位で編集し、セグメント毎に装飾を適用。
+ *   共有 SoapEditor は marks を落とすため、当ワークスペース専用に増築。
+ * ────────────────────────────────────────────────────────────────────────── */
+
+type SoapMarks = NonNullable<TextSpan['marks']>;
+type MarkSize = NonNullable<SoapMarks['size']>;
+
+const SOAP_KEYS: SoapKind[] = ['S', 'O', 'A', 'P'];
+// 文字色3種（添付文書/DigiKar同等の警告・強調・補足）＋ 既定（黒）。
+const TEXT_COLORS: { key: string; label: string; value?: string }[] = [
+  { key: 'default', label: '既定' },
+  { key: 'red', label: '赤', value: '#b91c1c' },
+  { key: 'blue', label: '青', value: '#1d4ed8' },
+  { key: 'green', label: '緑', value: '#15803d' },
+];
+const SIZE_LABEL: Record<MarkSize, string> = { sm: '小', md: '中', lg: '大', xl: '特大' };
+const SIZE_CLASS: Record<MarkSize, string> = {
+  sm: 'text-2xs',
+  md: 'text-sm',
+  lg: 'text-base',
+  xl: 'text-lg',
+};
+const SIZE_CYCLE: MarkSize[] = ['sm', 'md', 'lg', 'xl'];
+
+/** 1つの span の marks からプレビュー用 className / style を導出。 */
+function spanStyle(marks?: SoapMarks): { className: string; style: React.CSSProperties } {
+  const size = marks?.size ?? 'md';
+  return {
+    className: cnLocal(SIZE_CLASS[size], marks?.bold && 'font-bold'),
+    style: marks?.color ? { color: marks.color } : {},
+  };
+}
+function cnLocal(...xs: (string | false | undefined)[]): string {
+  return xs.filter(Boolean).join(' ');
+}
+
+function getSection(blocks: SoapBlock[], kind: SoapKind): TextSpan[] {
+  const b = blocks.find((x) => x.kind === kind);
+  return b && b.spans.length ? b.spans : [{ text: '' }];
+}
+
+function RichSoapEditor({
+  value,
+  onChange,
+  readOnly = false,
+}: {
+  value: SoapBlock[];
+  onChange: (v: SoapBlock[]) => void;
+  readOnly?: boolean;
+}) {
+  // active セグメント（kind ＋ span index）。装飾ボタンはこのセグメントに作用。
+  const [active, setActive] = React.useState<{ kind: SoapKind; idx: number }>({ kind: 'S', idx: 0 });
+
+  const setSection = (kind: SoapKind, spans: TextSpan[]) => {
+    const exists = value.some((b) => b.kind === kind);
+    const cleaned = spans.length ? spans : [{ text: '' }];
+    onChange(
+      exists
+        ? value.map((b) => (b.kind === kind ? { kind, spans: cleaned } : b))
+        : [...value, { kind, spans: cleaned }],
+    );
+  };
+
+  const mutateSpan = (kind: SoapKind, idx: number, fn: (s: TextSpan) => TextSpan) => {
+    const spans = getSection(value, kind).map((s, i) => (i === idx ? fn(s) : s));
+    setSection(kind, spans);
+  };
+  const setMark = (kind: SoapKind, idx: number, patch: Partial<SoapMarks>) =>
+    mutateSpan(kind, idx, (s) => {
+      const marks: SoapMarks = { ...(s.marks ?? {}), ...patch };
+      // 既定値は marks から除去して JSON を軽量に保つ。
+      if (marks.bold === false) delete marks.bold;
+      if (marks.color == null) delete marks.color;
+      if (marks.size === 'md') delete marks.size;
+      return { ...s, marks: Object.keys(marks).length ? marks : undefined };
+    });
+
+  // 箇条書き: 各行頭に「・」を付与/除去（テキスト変換＝型に収まり round-trip 安定）。
+  const isBulleted = (text: string) =>
+    text.length > 0 && text.split('\n').every((ln) => ln.trim() === '' || ln.startsWith('・'));
+  const toggleBullet = (kind: SoapKind, idx: number) =>
+    mutateSpan(kind, idx, (s) => {
+      const on = isBulleted(s.text);
+      const text = s.text
+        .split('\n')
+        .map((ln) => (on ? ln.replace(/^・\s?/, '') : ln.trim() === '' ? ln : `・${ln}`))
+        .join('\n');
+      return { ...s, text };
+    });
+
+  const addSegment = (kind: SoapKind) => {
+    const spans = [...getSection(value, kind), { text: '' }];
+    setSection(kind, spans);
+    setActive({ kind, idx: spans.length - 1 });
+  };
+  const removeSegment = (kind: SoapKind, idx: number) => {
+    const spans = getSection(value, kind).filter((_, i) => i !== idx);
+    setSection(kind, spans.length ? spans : [{ text: '' }]);
+    setActive({ kind, idx: 0 });
+  };
+
+  const cur = getSection(value, active.kind)[active.idx];
+  const curMarks = (cur?.marks ?? {}) as SoapMarks;
+
+  return (
+    <div className="flex flex-col gap-3">
+      {/* 装飾ツールバー（選択中セグメントに作用） */}
+      {!readOnly && (
+        <div className="sticky top-0 z-10 -mx-1 flex flex-wrap items-center gap-1 rounded border border-line bg-white px-2 py-1.5 text-2xs">
+          <span className="font-bold text-muted">装飾</span>
+          <span className="rounded bg-soft px-1 text-muted">{active.kind} #{active.idx + 1}</span>
+          <button
+            type="button"
+            onClick={() => setMark(active.kind, active.idx, { bold: !curMarks.bold })}
+            className={cnLocal(
+              'rounded border px-1.5 py-0.5 font-bold',
+              curMarks.bold ? 'border-accent-500 bg-accent-50 text-accent-700' : 'border-line',
+            )}
+            title="太字"
+          >
+            B
+          </button>
+          <span className="ml-1 inline-flex overflow-hidden rounded border border-line">
+            {TEXT_COLORS.map((c) => {
+              const on = (curMarks.color ?? undefined) === c.value;
+              return (
+                <button
+                  key={c.key}
+                  type="button"
+                  onClick={() => setMark(active.kind, active.idx, { color: c.value })}
+                  className={cnLocal('px-1.5 py-0.5', on ? 'bg-accent-50' : 'bg-white')}
+                  title={`文字色: ${c.label}`}
+                  style={{ color: c.value ?? '#111' }}
+                >
+                  {c.label}
+                </button>
+              );
+            })}
+          </span>
+          <button
+            type="button"
+            onClick={() => {
+              const next = SIZE_CYCLE[(SIZE_CYCLE.indexOf(curMarks.size ?? 'md') + 1) % SIZE_CYCLE.length]!;
+              setMark(active.kind, active.idx, { size: next });
+            }}
+            className="ml-1 rounded border border-line px-1.5 py-0.5"
+            title="文字サイズ（循環）"
+          >
+            サイズ: {SIZE_LABEL[curMarks.size ?? 'md']}
+          </button>
+          <button
+            type="button"
+            onClick={() => toggleBullet(active.kind, active.idx)}
+            className={cnLocal(
+              'rounded border px-1.5 py-0.5',
+              cur && isBulleted(cur.text) ? 'border-accent-500 bg-accent-50 text-accent-700' : 'border-line',
+            )}
+            title="箇条書き（行頭・）"
+          >
+            ・箇条書き
+          </button>
+        </div>
+      )}
+
+      {SOAP_KEYS.map((k) => {
+        const spans = getSection(value, k);
+        return (
+          <div key={k} className="flex flex-col gap-1">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-bold text-accent-700">{SOAP_LABEL[k]}</span>
+              {!readOnly && (
+                <button
+                  type="button"
+                  onClick={() => addSegment(k)}
+                  className="text-2xs text-accent-700 hover:underline"
+                  title="装飾の異なるセグメントを追加"
+                >
+                  ＋セグメント
+                </button>
+              )}
+            </div>
+            <div className="flex flex-col gap-1 rounded border border-line bg-white p-1.5">
+              {spans.map((sp, i) => {
+                const isActive = active.kind === k && active.idx === i;
+                const st = spanStyle(sp.marks);
+                return (
+                  <div
+                    key={i}
+                    className={cnLocal(
+                      'flex items-start gap-1 rounded px-1',
+                      isActive && !readOnly && 'bg-accent-50/50 ring-1 ring-accent-200',
+                    )}
+                  >
+                    <textarea
+                      value={sp.text}
+                      readOnly={readOnly}
+                      onFocus={() => setActive({ kind: k, idx: i })}
+                      onChange={(e) => mutateSpan(k, i, (s) => ({ ...s, text: e.target.value }))}
+                      rows={Math.max(1, sp.text.split('\n').length)}
+                      placeholder={readOnly ? '' : i === 0 ? `${SOAP_LABEL[k]} を入力` : '追記セグメント'}
+                      className={cnLocal(
+                        'min-h-[1.8rem] w-full resize-none rounded border border-transparent bg-transparent px-1 py-0.5 outline-none focus:border-line',
+                        st.className,
+                      )}
+                      style={st.style}
+                    />
+                    {!readOnly && spans.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => removeSegment(k, i)}
+                        className="mt-1 shrink-0 text-muted/60 hover:text-alert"
+                        title="このセグメントを削除"
+                      >
+                        <Icon name="x" size={11} />
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }

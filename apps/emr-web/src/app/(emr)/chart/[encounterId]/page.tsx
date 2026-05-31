@@ -1,25 +1,102 @@
 import { notFound } from 'next/navigation';
 import { prisma } from '@medixus/db';
-import { age, emptySoap, type SoapBlock } from '@medixus/domain';
+import { age, emptySoap, ORDER_TYPE_LABEL, type OrderType, type SoapBlock } from '@medixus/domain';
 import { PatientBar, type PatientBarData } from '@medixus/ui';
 import { requireSession } from '@/lib/session';
 import { ChartWorkspace } from './workspace';
+import type { PastEntry, PastOrder } from './history-panel';
 
-export default async function ChartPage({
-  params,
-}: {
-  params: Promise<{ encounterId: string }>;
-}) {
-  await requireSession();
-  const { encounterId } = await params;
+// EMR routes already render dynamically (cookies/session). The chart page also
+// reads heavily from Prisma; keep it explicit so the build never needs a live
+// DATABASE_URL and so DB-less previews still render the demo workspace.
+export const dynamic = 'force-dynamic';
 
+type Drug = {
+  id: string;
+  brandName: string;
+  genericName: string | null;
+  strengthUnit: string | null;
+  administrationRoute: string;
+};
+
+/** 1件のオーダ detail JSON から一覧表示用サマリを組み立てる（種別ごとに最善努力）。 */
+function orderSummary(orderType: string, detail: unknown): string {
+  const d = (detail ?? {}) as Record<string, unknown>;
+  const items = Array.isArray(d.items) ? (d.items as Record<string, unknown>[]) : [];
+  if (items.length > 0) {
+    const names = items
+      .map((it) => (it.drugName ?? it.name ?? it.examName ?? '') as string)
+      .filter(Boolean);
+    if (names.length > 0) return names.join('、');
+  }
+  if (typeof d.summary === 'string' && d.summary) return d.summary;
+  if (typeof d.name === 'string' && d.name) return d.name;
+  return ORDER_TYPE_LABEL[orderType as OrderType] ?? orderType;
+}
+
+const DEMO_PATIENT: PatientBarData = {
+  patientId: 'demo-pat',
+  patientNo: '000123',
+  name: '見本 太郎',
+  kana: 'ミホン タロウ',
+  gender: '男性',
+  age: 58,
+  inout: '外来',
+  ward: null,
+  mode: 'カルテ記述',
+  allergies: ['ペニシリン系'],
+  infections: [],
+  isVip: false,
+};
+
+const DEMO_DRUGS: Drug[] = [
+  { id: 'd1', brandName: 'アムロジピンOD錠5mg', genericName: 'アムロジピンベシル酸塩', strengthUnit: '錠', administrationRoute: '経口' },
+  { id: 'd2', brandName: 'カロナール錠500', genericName: 'アセトアミノフェン', strengthUnit: '錠', administrationRoute: '経口' },
+  { id: 'd3', brandName: 'メトホルミン錠250mgMT', genericName: 'メトホルミン塩酸塩', strengthUnit: '錠', administrationRoute: '経口' },
+];
+
+const DEMO_PAST: PastEntry[] = [
+  {
+    date: new Date(Date.now() - 14 * 864e5).toISOString(),
+    noteId: 'demo-n1',
+    version: 1,
+    status: 'LOCKED',
+    blocks: [
+      { kind: 'S', spans: [{ text: '自覚症状なし。服薬継続中。' }] },
+      { kind: 'O', spans: [{ text: '血圧 138/84 mmHg、脈 72/分。浮腫なし。' }] },
+      { kind: 'A', spans: [{ text: '本態性高血圧、コントロール概ね良好。' }] },
+      { kind: 'P', spans: [{ text: '同処方継続。家庭血圧記録。1ヶ月後再診。' }] },
+    ],
+    orders: [
+      { id: 'demo-o1', orderType: 'RX', orderTypeLabel: '処方', status: 'doctor_confirmed', summary: 'アムロジピンOD錠5mg 1×1×28日' },
+      { id: 'demo-o2', orderType: 'LAB', orderTypeLabel: '検体検査', status: 'APPROVED', summary: '生化学一般・HbA1c' },
+    ],
+  },
+  {
+    date: new Date(Date.now() - 42 * 864e5).toISOString(),
+    noteId: 'demo-n2',
+    version: 2,
+    status: 'LOCKED',
+    blocks: [
+      { kind: 'S', spans: [{ text: '時々ふらつき。' }] },
+      { kind: 'O', spans: [{ text: '血圧 146/90 mmHg。' }] },
+      { kind: 'A', spans: [{ text: '降圧不十分。' }] },
+      { kind: 'P', spans: [{ text: 'アムロジピン 2.5→5mg へ増量。' }] },
+    ],
+    orders: [{ id: 'demo-o3', orderType: 'RX', orderTypeLabel: '処方', status: 'doctor_confirmed', summary: 'アムロジピンOD錠5mg 1×1×28日' }],
+  },
+];
+
+/** DB が利用可能なら実データ束を返す。接続不能時は throw（呼び元でデモ描画）。 */
+async function loadChartData(encounterId: string) {
   const enc = await prisma.encounter.findUnique({
     where: { id: encounterId },
     include: {
       patient: { include: { allergies: true, infections: true, profile: true } },
     },
   });
-  if (!enc) notFound();
+  // DB は生きているが該当エンカウンタが無い場合だけ 404。
+  if (!enc) return { kind: 'notfound' as const };
 
   const dept = await prisma.department.findUnique({ where: { id: enc.departmentId } });
   const ward = enc.wardId ? await prisma.ward.findUnique({ where: { id: enc.wardId } }) : null;
@@ -97,6 +174,126 @@ export default async function ChartPage({
     },
   });
 
+  // ── 過去カルテ参照（縦/横）・セクションDo 用データ ──
+  // 患者の最新版ノート（全エンカウンタ横断・確定/保存済）を日付降順で。
+  const pastNotes = await prisma.clinicalNote.findMany({
+    where: { patientId: enc.patient.id, isLatest: true, noteType: 'PROGRESS' },
+    orderBy: [{ recordedDate: 'desc' }],
+    take: 30,
+    select: { id: true, recordedDate: true, version: true, status: true, blocks: true },
+  });
+  const pastOrders = await prisma.order.findMany({
+    where: { patientId: enc.patient.id, isLatest: true },
+    orderBy: [{ createdAt: 'desc' }],
+    take: 120,
+    select: { id: true, orderType: true, status: true, detail: true, createdAt: true },
+  });
+  const pastEntries = buildPastEntries(pastNotes, pastOrders);
+
+  return {
+    kind: 'ok' as const,
+    enc,
+    dept,
+    ward,
+    notes,
+    latest,
+    drugs,
+    recommended,
+    activeDx,
+    prescriptions,
+    pastEntries,
+  };
+}
+
+/** 最新ノート + オーダを「記録日（日単位）」でまとめ、過去カルテエントリへ整形。 */
+function buildPastEntries(
+  notes: { id: string; recordedDate: Date; version: number; status: string; blocks: unknown }[],
+  orders: { id: string; orderType: string; status: string; detail: unknown; createdAt: Date }[],
+): PastEntry[] {
+  const dayKey = (d: Date) => d.toISOString().slice(0, 10);
+  const map = new Map<string, PastEntry>();
+
+  for (const n of notes) {
+    const key = dayKey(n.recordedDate);
+    if (!map.has(key)) {
+      map.set(key, {
+        date: n.recordedDate.toISOString(),
+        noteId: n.id,
+        version: n.version,
+        status: n.status,
+        blocks: (n.blocks as unknown as SoapBlock[]) ?? emptySoap(),
+        orders: [],
+      });
+    }
+  }
+  for (const o of orders) {
+    const key = dayKey(o.createdAt);
+    let entry = map.get(key);
+    if (!entry) {
+      entry = { date: o.createdAt.toISOString(), noteId: null, version: 0, status: '', blocks: emptySoap(), orders: [] };
+      map.set(key, entry);
+    }
+    const po: PastOrder = {
+      id: o.id,
+      orderType: o.orderType,
+      orderTypeLabel: ORDER_TYPE_LABEL[o.orderType as OrderType] ?? o.orderType,
+      status: o.status,
+      summary: orderSummary(o.orderType, o.detail),
+    };
+    entry.orders.push(po);
+  }
+  return [...map.values()].sort((a, b) => (a.date < b.date ? 1 : -1));
+}
+
+export default async function ChartPage({
+  params,
+}: {
+  params: Promise<{ encounterId: string }>;
+}) {
+  await requireSession();
+  const { encounterId } = await params;
+
+  let data: Awaited<ReturnType<typeof loadChartData>> | null = null;
+  try {
+    data = await loadChartData(encounterId);
+  } catch (err) {
+    // DB 未接続・到達不能時はデモ描画にフォールバック（画面は必ず出す）。
+    console.error('[ChartPage] DB load failed, rendering demo workspace:', err);
+    data = null;
+  }
+
+  if (data?.kind === 'notfound') notFound();
+
+  // ── フロントのみ（DB無）: デモワークスペースを描画 ──
+  if (!data || data.kind !== 'ok') {
+    return (
+      <div>
+        <PatientBar p={DEMO_PATIENT} />
+        <div className="border-b border-amber-300 bg-amber-50 px-3 py-1 text-2xs text-warn">
+          デモ表示（DB未接続）：保存等の操作は無効です。
+        </div>
+        <ChartWorkspace
+          encounterId={encounterId}
+          patientId={DEMO_PATIENT.patientId}
+          deptName="内科"
+          latestNote={null}
+          initialBlocks={emptySoap()}
+          history={[]}
+          drugs={DEMO_DRUGS}
+          recommended={[]}
+          diagnoses={[
+            { id: 'dx1', displayName: '本態性高血圧症', icd10: 'I10', isMain: true, isSuspected: false, fromMaster: true },
+            { id: 'dx2', displayName: '2型糖尿病', icd10: 'E119', isMain: false, isSuspected: false, fromMaster: true },
+          ]}
+          prescriptions={[]}
+          pastEntries={DEMO_PAST}
+        />
+      </div>
+    );
+  }
+
+  const { enc, dept, ward, notes, latest, drugs, recommended, activeDx, prescriptions, pastEntries } = data;
+
   const p = enc.patient;
   const bar: PatientBarData = {
     patientId: p.id,
@@ -168,6 +365,7 @@ export default async function ChartPage({
           })),
           overrides: rx.overrides.map((o) => o.ruleCheckResultId),
         }))}
+        pastEntries={pastEntries}
       />
     </div>
   );

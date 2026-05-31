@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240" width="240" height="240" role="img" aria-label="頭部（正面）">
+  <rect width="240" height="240" fill="#ffffff"/>
+  <g fill="none" stroke="#5b6b7a" stroke-width="2" stroke-linejoin="round" stroke-linecap="round">
+    <!-- skull / face outline -->
+    <path d="M120 24 C76 24 58 60 58 104 C58 150 84 196 120 210 C156 196 182 150 182 104 C182 60 164 24 120 24 Z"/>
+    <!-- ears -->
+    <path d="M58 100 q-14 4 -10 26 q4 16 18 12"/>
+    <path d="M182 100 q14 4 10 26 q-4 16 -18 12"/>
+    <!-- eyebrows -->
+    <path d="M82 92 q16 -8 30 -2" stroke-width="1.6"/>
+    <path d="M128 90 q14 -6 30 2" stroke-width="1.6"/>
+    <!-- eyes -->
+    <ellipse cx="97" cy="106" rx="13" ry="8"/>
+    <ellipse cx="143" cy="106" rx="13" ry="8"/>
+    <circle cx="97" cy="106" r="3.2" fill="#5b6b7a"/>
+    <circle cx="143" cy="106" r="3.2" fill="#5b6b7a"/>
+    <!-- nose -->
+    <path d="M120 110 L113 142 q7 7 14 0"/>
+    <!-- mouth -->
+    <path d="M98 166 q22 14 44 0"/>
+    <!-- midline -->
+    <path d="M120 24 L120 210" stroke-width="1" stroke-dasharray="2 5"/>
+  </g>
+  <text x="120" y="234" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#9aa6b2">頭部（正面）</text>
+</svg>

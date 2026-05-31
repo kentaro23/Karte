@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 200" width="240" height="200" role="img" aria-label="眼・鼻部">
+  <rect width="240" height="200" fill="#ffffff"/>
+  <g fill="none" stroke="#5b6b7a" stroke-width="2" stroke-linejoin="round" stroke-linecap="round">
+    <!-- eyebrows -->
+    <path d="M44 52 q26 -14 56 -4" stroke-width="1.8"/>
+    <path d="M140 48 q30 -10 56 4" stroke-width="1.8"/>
+    <!-- right eye (patient's) -->
+    <path d="M40 84 q30 -26 64 0 q-30 24 -64 0 Z"/>
+    <circle cx="72" cy="84" r="13"/>
+    <circle cx="72" cy="84" r="5" fill="#5b6b7a"/>
+    <path d="M40 84 q30 26 64 0" stroke-width="1.2"/>
+    <!-- left eye -->
+    <path d="M136 84 q30 -26 64 0 q-30 24 -64 0 Z"/>
+    <circle cx="168" cy="84" r="13"/>
+    <circle cx="168" cy="84" r="5" fill="#5b6b7a"/>
+    <path d="M136 84 q30 26 64 0" stroke-width="1.2"/>
+    <!-- nasal bridge & nose -->
+    <path d="M120 70 L120 150"/>
+    <path d="M120 150 q-18 10 -28 2 M120 150 q18 10 28 2"/>
+    <path d="M104 156 q16 12 32 0" stroke-width="1.4"/>
+    <!-- nostrils -->
+    <ellipse cx="106" cy="150" rx="4" ry="6"/>
+    <ellipse cx="134" cy="150" rx="4" ry="6"/>
+  </g>
+  <text x="120" y="194" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#9aa6b2">眼・鼻部</text>
+</svg>
