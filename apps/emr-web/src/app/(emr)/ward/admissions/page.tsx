@@ -109,8 +109,9 @@ function demoData(): WardData {
 
 /**
  * フェイルソフトなデータ取得 — FR-WRD-01。
- * Encounter には bedId カラムが無い（基盤確定）ため、病床割当は在床順カーソルで決定論的に導出し、
- * 病床マップ（map/page.tsx）と同じ割付けロジックを共有することで両画面の整合を保つ。
+ * 在床は Encounter.currentBedId（本永続化された割当）を正として bedId 直接マッピングで配置し、
+ * currentBedId 未設定の在院（本永続化前データ / デモ）は病棟内の在床順カーソルで補完する。
+ * 病床マップ（map/page.tsx）と同じ配置ロジックを共有することで両画面の整合を保つ。
  * DB 未接続・未マイグレーション・エンジン読込失敗でも画面が成立するようデモへフォールバックする。
  */
 async function loadData(): Promise<WardData> {
@@ -134,15 +135,23 @@ async function loadData(): Promise<WardData> {
       (e) => e.receptionStatus !== 'BILLING_DONE' && e.receptionStatus !== 'CANCELLED',
     );
 
-    // 病棟ごとに在床患者を作成順で割付け（map と同一ロジック）→ encounterId → bedLabel を導出。
+    // 正の所在: currentBedId で bedId → 在院 を直接マッピング。
+    const directByBed = new Map<string, (typeof activeEnc)[number]>();
+    for (const e of activeEnc) {
+      if (e.currentBedId) directByBed.set(e.currentBedId, e);
+    }
+    const placedEncIds = new Set([...directByBed.values()].map((e) => e.id));
+
+    // 病棟ごとに encounterId → bedLabel と bedId → 在床 を導出（currentBedId 優先、残りは在床順カーソル）。
     const bedLabelByEnc = new Map<string, { roomCode: string; bedCode: string }>();
     const occupantByBed = new Map<string, { encounterId: string; gender: Gender; name: string }>();
     for (const w of wardRows) {
-      const wardPatients = activeEnc.filter((e) => e.wardId === w.id);
+      const fallbackPatients = activeEnc.filter((e) => e.wardId === w.id && !placedEncIds.has(e.id));
       const allBeds = w.rooms.flatMap((r) => r.beds.map((b) => ({ room: r, bed: b })));
       let cursor = 0;
       for (const { room, bed } of allBeds) {
-        const occ = cursor < wardPatients.length ? wardPatients[cursor++] : null;
+        const direct = directByBed.get(bed.id) ?? null;
+        const occ = direct ?? (cursor < fallbackPatients.length ? fallbackPatients[cursor++] : null);
         if (occ) {
           const label = { roomCode: room.code, bedCode: bed.code.split('-').pop() ?? bed.code };
           bedLabelByEnc.set(occ.id, label);
@@ -265,7 +274,7 @@ export default async function AdmissionsPage() {
           <Panel pad={false}>
             <div className="flex items-center justify-between border-b border-line px-4 py-2.5">
               <span className="text-sm font-bold">在院患者</span>
-              <span className="text-2xs text-muted">病床割当は在床順に決定論的に導出（病床マップと整合）</span>
+              <span className="text-2xs text-muted">病床割当は現在割当（BedAssignment）を正に表示・未割当は在床順で補完（病床マップと整合）</span>
             </div>
             {inpatients.length === 0 ? (
               <EmptyState title="在院患者はいません" hint="右の入院受付から病棟・病床を割当てると一覧と病床マップに反映されます" icon={<Icon name="ward" size={30} />} />
@@ -389,7 +398,7 @@ export default async function AdmissionsPage() {
                 ))}
               </Select>
             </Field>
-            <Field label="病床（任意）" hint="割当病床コードは監査に記録。実割付けは病床マップ（在床順）で表示">
+            <Field label="病床（任意）" hint="選択した病床に割当（BedAssignment へ記録）。未選択は空床順で補完表示">
               <Select name="bedCode" defaultValue="">
                 <option value="">自動（空床順）</option>
                 {wards.flatMap((w) =>

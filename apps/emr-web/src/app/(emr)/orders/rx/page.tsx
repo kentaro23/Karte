@@ -2,6 +2,7 @@ import { prisma } from '@medixus/db';
 import { Panel, Badge } from '@medixus/ui';
 import { PageBody, PageHeader } from '@/components/page';
 import { RxClient } from './rx-client';
+import { loadUsageMasters, loadOrderSets } from './actions';
 
 // 安全チェック・発行は受診コンテキストに依存するため常に動的描画。
 export const dynamic = 'force-dynamic';
@@ -45,7 +46,13 @@ async function loadData(): Promise<{ patients: { id: string; label: string }[]; 
 }
 
 export default async function Page() {
-  const { patients, drugs } = await loadData();
+  // 用法マスタ・処方セットは本永続化（UsageMaster / OrderSet）から読み込む。
+  // いずれも内部で fail-soft（DB 無＝用法はフォールバック、セットは空）。
+  const [{ patients, drugs }, usages, orderSets] = await Promise.all([
+    loadData(),
+    loadUsageMasters(),
+    loadOrderSets(),
+  ]);
 
   return (
     <PageBody>
@@ -64,7 +71,7 @@ export default async function Page() {
         </Panel>
       )}
 
-      <RxClient patients={patients} drugs={drugs} />
+      <RxClient patients={patients} drugs={drugs} usages={usages} initialSets={orderSets} />
 
       <Panel className="mt-4">
         <p className="text-2xs leading-relaxed text-muted">

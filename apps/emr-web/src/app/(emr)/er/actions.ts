@@ -3,8 +3,9 @@
  * 救急（/er）のサーバアクション。FR-ER-01 / G30 / 174:10-12。
  *
  *  - registerEmergency …… 救急受付。Encounter(encounterType=EMERGENCY) を生成し、
- *      トリアージレベル(L1-L5)・搬送方法(arrivalMethod)・主訴を記録する。
- *  - retriagePatient ……… 再トリアージ。triageLevel を更新（受付一覧の優先表示が変わる）。
+ *      受付記録（主訴/搬送方法/受付時トリアージ/同意区分）を EmergencyVisit に本永続化する。
+ *  - retriagePatient ……… 再トリアージ。Encounter.triageLevel を更新（受付一覧の優先表示が
+ *      変わる）。受付時トリアージ EmergencyVisit.triageLevelAtArrival は保全され不変。
  *  - fetchSixInfo ………… オン資/マイナ保険証経由の「救急時6情報」参照
  *      （interop insurance-verify の fetchPatientInfo スタブ経由）。意識のない患者でも
  *      最小クリックで傷病名/感染症/アレルギー/検査/処方を参照する導線。
@@ -38,6 +39,34 @@ function isTriageKey(v: string): v is TriageLevelKey {
   return (TRIAGE_KEYS as string[]).includes(v);
 }
 
+/** schema.prisma ConsentType（本永続化の値）。 */
+type ConsentTypeKey = 'EXPLICIT' | 'IMPLIED' | 'SURROGATE' | 'EMERGENCY_EXCEPTION';
+
+/**
+ * 受付フォームの同意区分（NORMAL/IMPLIED/FAMILY）→ schema.prisma ConsentType へマップ。
+ * EmergencyVisit.consentType は ConsentType enum なので、UI 値をそのまま入れず正規化する。
+ *  - NORMAL（本人同意） → EXPLICIT
+ *  - IMPLIED（黙示の同意・緊急避難） → IMPLIED
+ *  - FAMILY（家族・付添者同意） → SURROGATE
+ * 既に enum 値（EXPLICIT 等）が来た場合はそのまま採用。未知値は null（記録のみ省略）。
+ */
+function mapConsentType(raw: string | null): ConsentTypeKey | null {
+  if (!raw) return null;
+  switch (raw) {
+    case 'NORMAL':
+      return 'EXPLICIT';
+    case 'FAMILY':
+      return 'SURROGATE';
+    case 'EXPLICIT':
+    case 'IMPLIED':
+    case 'SURROGATE':
+    case 'EMERGENCY_EXCEPTION':
+      return raw;
+    default:
+      return null;
+  }
+}
+
 // ── 画面が消費する公開型 ─────────────────────────────────────────────────
 export interface ErEncounterRow {
   encounterId: string;
@@ -51,6 +80,8 @@ export interface ErEncounterRow {
   arrivalMethod: string | null;
   arrivedAt: string | null;
   status: string;
+  /** 受付時の主訴（EmergencyVisit から取得。無ければ null）。 */
+  chiefComplaint: string | null;
 }
 export interface ErOption {
   value: string;
@@ -91,6 +122,7 @@ function demoErRows(): ErEncounterRow[] {
       arrivalMethod: '救急車（ドクターカー）',
       arrivedAt: new Date(Date.now() - 6 * 60 * 1000).toISOString(),
       status: 'ARRIVED',
+      chiefComplaint: '胸痛・冷汗（ACS 疑い）',
     },
     {
       encounterId: 'demo-er-2',
@@ -104,6 +136,7 @@ function demoErRows(): ErEncounterRow[] {
       arrivalMethod: '救急車',
       arrivedAt: new Date(Date.now() - 14 * 60 * 1000).toISOString(),
       status: 'ARRIVED',
+      chiefComplaint: '路上で意識消失・JCS 30',
     },
     {
       encounterId: 'demo-er-3',
@@ -117,6 +150,7 @@ function demoErRows(): ErEncounterRow[] {
       arrivalMethod: '独歩（walk-in）',
       arrivedAt: new Date(Date.now() - 28 * 60 * 1000).toISOString(),
       status: 'ARRIVED',
+      chiefComplaint: '発熱・咽頭痛',
     },
     {
       encounterId: 'demo-er-4',
@@ -130,6 +164,7 @@ function demoErRows(): ErEncounterRow[] {
       arrivalMethod: '独歩（walk-in）',
       arrivedAt: new Date(Date.now() - 45 * 60 * 1000).toISOString(),
       status: 'ARRIVED',
+      chiefComplaint: '右足首の捻挫',
     },
   ];
 }
@@ -160,7 +195,8 @@ export async function loadEr(): Promise<ErListData> {
         where: { encounterType: 'EMERGENCY' },
         orderBy: { createdAt: 'desc' },
         take: 50,
-        include: { patient: true },
+        // emergencyVisit（受付記録）を同梱し、主訴は本永続化モデルから取得する。
+        include: { patient: true, emergencyVisit: true },
       }),
       prisma.patient.findMany({ orderBy: { createdAt: 'asc' }, take: 40 }),
       prisma.department.findMany({ orderBy: { name: 'asc' }, take: 40 }),
@@ -184,6 +220,8 @@ export async function loadEr(): Promise<ErListData> {
           arrivalMethod: e.arrivalMethod,
           arrivedAt: e.arrivedAt ? e.arrivedAt.toISOString() : null,
           status: e.receptionStatus,
+          // 主訴は EmergencyVisit（本永続化）から。未同梱/未作成なら null。
+          chiefComplaint: e.emergencyVisit?.chiefComplaint ?? null,
         };
       });
     const patientOptions: ErOption[] = patients.map((p) => ({
@@ -222,8 +260,10 @@ async function auditSafe(args: Parameters<typeof writeAudit>[0]): Promise<void> 
 }
 
 /**
- * 救急受付。Encounter(EMERGENCY) を生成し、トリアージ・搬送方法・主訴を記録。
+ * 救急受付。Encounter(EMERGENCY) を生成し、続けて受付記録を EmergencyVisit へ本永続化する
+ * （主訴/搬送方法/受付時トリアージ triageLevelAtArrival/同意区分 consentType）。
  * AC(1): トリアージレベルが記録され、一覧で優先表示される。
+ * 身元不明（患者未指定で Encounter 未作成）枝は EmergencyVisit も作らず、監査 detail のみ残す。
  */
 export async function registerEmergency(formData: FormData): Promise<void> {
   const s = await requireSession();
@@ -232,8 +272,11 @@ export async function registerEmergency(formData: FormData): Promise<void> {
   const arrivalMethod = String(formData.get('arrivalMethod') || '').trim() || null;
   const departmentId = String(formData.get('departmentId') || '').trim() || null;
   const chiefComplaint = String(formData.get('chiefComplaint') || '').trim() || null;
-  // 意識障害等で本人確認が取れない場合の同意区分（IMPLIED=黙示の同意／緊急避難）。
-  const consentType = String(formData.get('consentType') || '').trim() || null;
+  // 意識障害等で本人確認が取れない場合の同意区分。UI 値(NORMAL/IMPLIED/FAMILY)を
+  // schema.prisma ConsentType(EXPLICIT/IMPLIED/SURROGATE/...) へ正規化して永続化する。
+  const consentType = mapConsentType(
+    String(formData.get('consentType') || '').trim() || null,
+  );
 
   // 患者未選択（身元不明）でも受付は通す。トリアージは必須。
   const triageLevel = isTriageKey(triageRaw) ? triageRaw : null;
@@ -271,6 +314,7 @@ export async function registerEmergency(formData: FormData): Promise<void> {
     });
     const receptionNo = (last?.receptionNo ?? 0) + 1;
 
+    const arrivedAt = new Date();
     const enc = await prisma.encounter.create({
       data: {
         patientId,
@@ -280,17 +324,49 @@ export async function registerEmergency(formData: FormData): Promise<void> {
         receptionStatus: 'ARRIVED',
         triageLevel: triageLevel as never,
         arrivalMethod,
-        arrivedAt: new Date(),
+        arrivedAt,
         openedByUserId: s.userId,
       },
     });
 
+    // 救急受付記録の本永続化（EmergencyVisit）。主訴/同意区分/搬送方法/受付時トリアージを
+    // 監査 detail への退避から専用モデルへ昇格する。追記専用（訂正=新規 INSERT、update 禁止）。
+    // triageLevelAtArrival は受付時の値を保全し、以後の再トリアージ（Encounter.triageLevel
+    // 更新）では不変。書込みは fail-soft（DB 未接続でも受付フローを止めない）。
+    let emergencyVisitId: string | null = null;
+    try {
+      const ev = await prisma.emergencyVisit.create({
+        data: {
+          encounterId: enc.id,
+          patientId,
+          chiefComplaint,
+          arrivalMethod,
+          triageLevelAtArrival: triageLevel as never,
+          consentType: consentType as never,
+          isUnidentified: false,
+          arrivedAt,
+          receivedByUserId: s.userId,
+        },
+      });
+      emergencyVisitId = ev.id;
+    } catch (evErr) {
+      console.error('[er] EmergencyVisit insert failed (non-fatal):', evErr);
+    }
+
     await auditSafe({
       actorUserId: s.userId,
       action: 'CHART_WRITE',
-      resource: 'Encounter.emergency',
-      resourceId: enc.id,
-      detail: { triageLevel, arrivalMethod, chiefComplaint, consentType, persisted: true },
+      resource: 'EmergencyVisit',
+      resourceId: emergencyVisitId ?? enc.id,
+      detail: {
+        encounterId: enc.id,
+        emergencyVisitId,
+        triageLevel,
+        arrivalMethod,
+        chiefComplaint,
+        consentType,
+        persisted: emergencyVisitId != null,
+      },
     });
   } catch (err) {
     console.error('[er] registerEmergency failed:', err);

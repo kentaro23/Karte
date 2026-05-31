@@ -13,6 +13,10 @@ import type { SyncedVisitRecord, SyncOutcome } from './actions';
  *     「未同期キュー」をサーバーアクション syncOfflineRecords へ一括 POST。
  *     成功した clientId をキューから除去（冪等・部分成功対応）。
  *
+ * 同期が成立すると、サーバー側は Encounter(HOMECARE) を確定し、本文/バイタルを
+ * HomeVisit（追記専用・syncState=OFFLINE_QUEUED, 冪等キー=clientId）へ本永続化する。
+ * 確定済みの記録は当日スケジュール（page.tsx）側に「訪問完了」として現れる。
+ *
  * フロントのみモード（DB未接続）でも：
  *   - localStorage への蓄積／表示／編集は完全動作（端末内で完結）。
  *   - 同期はサーバー側が STUB を返すためキューは保持され、UI にその旨を表示。

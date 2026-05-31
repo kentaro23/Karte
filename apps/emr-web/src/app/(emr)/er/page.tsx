@@ -340,6 +340,13 @@ export default function ErPage() {
                       <span>受付No {r.receptionNo ?? '—'}</span>
                     </div>
 
+                    {r.chiefComplaint && (
+                      <div className="mt-1 text-2xs text-ink">
+                        <span className="text-muted">主訴：</span>
+                        {r.chiefComplaint}
+                      </div>
+                    )}
+
                     <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-line pt-2">
                       {/* 救急時6情報参照（最小クリック） */}
                       <Button

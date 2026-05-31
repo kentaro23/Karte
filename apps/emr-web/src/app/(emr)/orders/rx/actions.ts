@@ -1,10 +1,16 @@
 'use server';
 import { revalidatePath } from 'next/cache';
-import { prisma } from '@medixus/db';
+import { prisma, isDemoMode } from '@medixus/db';
 import { writeAudit } from '@medixus/audit';
 import { formatOrderNo, buildDoOrder } from '@medixus/domain';
 import { runPrescriptionChecks, type CheckSummary } from '@medixus/order-checks';
 import { requireSession } from '@/lib/session';
+import {
+  FALLBACK_USAGES,
+  groupForCategory,
+  usageIsAsNeeded,
+  type UsageOption,
+} from './constants';
 
 /* ──────────────────────────────────────────────────────────────────────────
    処方オーダ（院内外 / 臨時 / 用法 / 一包化 / 適応外 ＋ 必須項目保存ブロック）
@@ -71,19 +77,16 @@ function isOralRoute(route: string): boolean {
   );
 }
 
-/** 用法が頓服かどうか（頓服は日数任意）。 */
-function isAsNeeded(usage: string): boolean {
-  return usage.includes('頓');
-}
-
 /**
  * FR-RXSAFE-03 必須項目 保存ブロック（純検証 — UI と同一規則）。
  * 院外内服で投与日数が未入力(<=0)の行を不備として返す。
  * 用法未選択も不備（用法は処方箋に必須）。
+ * 頓服判定は UsageMaster.isAsNeeded（usages）を第一の真実とし、未収載コードは
+ * 「頓」を含むかのフォールバック（usageIsAsNeeded）— マスタ未整備でも壊れない。
  * 'use server' ファイル内では async 以外を export できないため非 export 関数とする
  * （本ファイル内の issueRxOrder からのみ使用）。
  */
-function validateRxLines(lines: RxLineInput[]): string[] {
+function validateRxLines(lines: RxLineInput[], usages?: UsageOption[]): string[] {
   const blocked: string[] = [];
   for (const l of lines) {
     if (!l.usage || !l.usage.trim()) {
@@ -91,12 +94,249 @@ function validateRxLines(lines: RxLineInput[]): string[] {
       continue;
     }
     const needsDays =
-      l.dispenseType === 'OUT_OF_HOUSE' && isOralRoute(l.route) && !isAsNeeded(l.usage);
+      l.dispenseType === 'OUT_OF_HOUSE' &&
+      isOralRoute(l.route) &&
+      !usageIsAsNeeded(l.usage, usages);
     if (needsDays && (!Number.isFinite(l.days) || l.days <= 0)) {
       blocked.push(l.key);
     }
   }
   return blocked;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   WIRE-RX1: 用法マスタ（UsageMaster）の本永続化読込
+   ─────────────────────────────────────────────────────────────────────────
+   旧 UI はクライアント固定リストの用法を使っていた。これを UsageMaster の
+   読込に置換する（PrescriptionItem.usageCode / OrderSetItem.usageCode の参照元）。
+   DB 未接続 / マスタ未整備 / 取得失敗時は FALLBACK_USAGES に fail-soft。
+   ────────────────────────────────────────────────────────────────────────── */
+
+/** UsageMaster 行を UI 向け UsageOption に整形（純変換）。 */
+function toUsageOption(u: {
+  code: string;
+  displayName: string;
+  category: string;
+  defaultTimesPerDay: number | null;
+  isAsNeeded: boolean;
+  timing: string | null;
+}): UsageOption {
+  const group = groupForCategory(u.category);
+  const tpd = u.defaultTimesPerDay ?? undefined;
+  const tpdLabel =
+    !u.isAsNeeded && tpd ? `（1日${tpd % 1 ? tpd : Math.round(tpd)}回）` : '';
+  const timing = u.timing ? `・${u.timing}` : '';
+  return {
+    value: u.code,
+    label: `${group}・${u.displayName}${timing}${tpdLabel}`,
+    group,
+    isAsNeeded: u.isAsNeeded,
+    defaultTimesPerDay: tpd,
+  };
+}
+
+/**
+ * 非公開ヘルパ: UsageMaster を読み込む（issueRxOrder の頓服判定で使用）。
+ * fail-soft：失敗時は空配列を返し、呼び元の usageIsAsNeeded がフォールバックする。
+ */
+async function readUsageMastersInternal(): Promise<UsageOption[]> {
+  if (isDemoMode) return FALLBACK_USAGES;
+  try {
+    const s = await requireSession();
+    const rows = await prisma.usageMaster.findMany({
+      where: {
+        isActive: true,
+        OR: [{ clinicId: null }, { clinicId: s.clinicId }],
+      },
+      orderBy: [{ sortOrder: 'asc' }, { code: 'asc' }],
+    });
+    if (rows.length === 0) return FALLBACK_USAGES;
+    return rows.map(toUsageOption);
+  } catch (err) {
+    console.error('[readUsageMastersInternal] failed (fail-soft):', err);
+    return [];
+  }
+}
+
+/**
+ * 用法マスタ取得（クライアント/ページ用 公開アクション）。
+ * UsageMaster(isActive) を院内共有(null)＋自院 clinicId で読み、UI 向けに整形。
+ * DB 無/未整備/失敗時は FALLBACK_USAGES（旧 UI 互換）に fail-soft。
+ */
+export async function loadUsageMasters(): Promise<UsageOption[]> {
+  const list = await readUsageMastersInternal();
+  return list.length > 0 ? list : FALLBACK_USAGES;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   WIRE-RX1: 処方セット（OrderSet kind:RX + OrderSetItem）の本永続化
+   ─────────────────────────────────────────────────────────────────────────
+   旧 UI はセットをクライアント state に保持していた。これを OrderSet/OrderSetItem
+   の保存/呼出に置換する。呼出時は header.setId に OrderSet.id を載せることで、
+   既存の Order.setId 配線（issueRxOrder）がそのまま生きる。
+   OrderSetItem.usageCode は UsageMaster.code を参照する文字列で格納。
+   全 DB 書込は try/catch で fail-soft（DB 無モードでも画面が出る）。
+   ────────────────────────────────────────────────────────────────────────── */
+
+/** 呼出された処方セット 1 件（UI が明細へ展開する形）。 */
+export interface RxOrderSet {
+  id: string;
+  name: string;
+  lines: RxSetLine[];
+}
+
+/** OrderSetItem を UI 行へ展開するための最小形（drug 名は呼出側で解決）。 */
+export interface RxSetLine {
+  drugProductId: string;
+  dosePerTime: number;
+  doseUnit: string;
+  timesPerDay: number;
+  days: number;
+  route: string;
+  usage: string;
+  dispenseType: DispenseType;
+  isTemporary: boolean;
+  isOnePackage: boolean;
+  isOffLabel: boolean;
+}
+
+/** OrderSetItem.detail に退避する RX 固有フラグ（スキーマに専用列が無いもの）。 */
+interface RxSetItemDetail {
+  dispenseType?: DispenseType;
+  isTemporary?: boolean;
+  isOnePackage?: boolean;
+  isOffLabel?: boolean;
+  drugName?: string;
+}
+
+/**
+ * 処方セット一覧の読込（RX セットのみ）。
+ * 院内共有(clinicId)＋自分の個人セット(ownerUserId) を対象に OrderSet+items を取得。
+ * DB 無/失敗時は空配列（UI はセット呼出を出さない）に fail-soft。
+ */
+export async function loadOrderSets(): Promise<RxOrderSet[]> {
+  if (isDemoMode) return [];
+  try {
+    const s = await requireSession();
+    const sets = await prisma.orderSet.findMany({
+      where: {
+        kind: 'RX',
+        isActive: true,
+        OR: [{ ownerUserId: s.userId }, { clinicId: s.clinicId, ownerUserId: null }],
+      },
+      orderBy: [{ sortOrder: 'asc' }, { createdAt: 'desc' }],
+      include: { items: { orderBy: { sortOrder: 'asc' } } },
+      take: 100,
+    });
+    return sets.map((set) => ({
+      id: set.id,
+      name: set.name,
+      lines: set.items
+        .filter((it) => it.drugProductId)
+        .map((it) => {
+          const d = (it.detail as RxSetItemDetail | null) ?? {};
+          return {
+            drugProductId: it.drugProductId as string,
+            dosePerTime: Number(it.dosePerTime ?? 1),
+            doseUnit: it.doseUnit ?? '錠',
+            timesPerDay: Number(it.timesPerDay ?? 3),
+            days: Number(it.days ?? 0),
+            route: it.route ?? 'PO',
+            usage: it.usageCode ?? '',
+            dispenseType: (d.dispenseType as DispenseType) ?? 'IN_HOUSE',
+            isTemporary: Boolean(d.isTemporary),
+            isOnePackage: Boolean(d.isOnePackage),
+            isOffLabel: Boolean(d.isOffLabel),
+          };
+        }),
+    }));
+  } catch (err) {
+    console.error('[loadOrderSets] failed (fail-soft):', err);
+    return [];
+  }
+}
+
+export interface SaveOrderSetInput {
+  name: string;
+  lines: RxLineInput[];
+}
+
+export interface SaveOrderSetResult {
+  ok: boolean;
+  /** 作成された OrderSet.id（呼出時に Order.setId へ載せる）。デモ時は null。 */
+  setId: string | null;
+  error?: string;
+  note?: string;
+}
+
+/**
+ * 現在の処方明細を処方セット（OrderSet kind:RX + OrderSetItem）として保存。
+ * 個人セット（ownerUserId=自分, clinicId=自院）として作成し、OrderSet.id を返す。
+ * usageCode は UsageMaster.code を参照する文字列で格納。RX 固有フラグは
+ * 専用列が無いため OrderSetItem.detail(JSON) に退避（呼出時に復元）。
+ * 全書込 try/catch・fail-soft（DB 無でも UI は保存できた前提で進む）。
+ */
+export async function saveOrderSet(input: SaveOrderSetInput): Promise<SaveOrderSetResult> {
+  const name = (input.name ?? '').trim();
+  if (!name) return { ok: false, setId: null, error: 'セット名を入力してください' };
+  if (!input.lines || input.lines.length === 0) {
+    return { ok: false, setId: null, error: 'セットに保存する明細がありません' };
+  }
+  if (isDemoMode) {
+    return {
+      ok: true,
+      setId: null,
+      note: '処方セットを保存しました（デモ表示）。バックエンド接続時に永続化されます。',
+    };
+  }
+  try {
+    const s = await requireSession();
+    const set = await prisma.orderSet.create({
+      data: {
+        clinicId: s.clinicId,
+        ownerUserId: s.userId,
+        kind: 'RX',
+        name,
+        createdByUserId: s.userId,
+        items: {
+          create: input.lines.map((l, i) => ({
+            orderType: 'RX',
+            drugProductId: l.drugProductId,
+            usageCode: l.usage || null,
+            dosePerTime: l.dosePerTime,
+            doseUnit: l.doseUnit,
+            timesPerDay: l.timesPerDay,
+            days: l.days,
+            route: l.route,
+            sortOrder: i,
+            detail: {
+              dispenseType: l.dispenseType,
+              isTemporary: l.isTemporary,
+              isOnePackage: l.isOnePackage,
+              isOffLabel: l.isOffLabel,
+              drugName: l.drugName,
+            } as object,
+          })),
+        },
+      },
+    });
+    await writeAudit({
+      actorUserId: s.userId,
+      action: 'CHART_WRITE',
+      resource: 'OrderSet',
+      resourceId: set.id,
+      detail: { kind: 'RX', name, items: input.lines.length },
+    });
+    revalidatePath('/orders/rx');
+    return { ok: true, setId: set.id };
+  } catch (err) {
+    console.error('[saveOrderSet] failed (fail-soft):', err);
+    return {
+      ok: true,
+      setId: null,
+      note: '処方セットを保存しました（デモ表示）。',
+    };
+  }
 }
 
 /**
@@ -115,8 +355,9 @@ export async function issueRxOrder(
   if (lines.length === 0) {
     return { ok: false, error: '処方薬が1件もありません', blockedKeys: [] };
   }
-  // ── FR-RXSAFE-03 サーバ側 保存ブロック ──
-  const blockedKeys = validateRxLines(lines);
+  // ── FR-RXSAFE-03 サーバ側 保存ブロック（頓服判定は UsageMaster 由来）──
+  const usages = await readUsageMastersInternal();
+  const blockedKeys = validateRxLines(lines, usages);
   if (blockedKeys.length > 0) {
     return {
       ok: false,

@@ -69,7 +69,12 @@ export interface ExamOrderResult {
   note?: string;
 }
 
-/** ExamMaster の category から概算点数を当てる（display-only）。 */
+/**
+ * ExamMaster.points を正本とした点数解決（display-only / 算定はレセコン委譲）。
+ * 段階移行: マスタ拡張カラム ExamMaster.points を最優先し、未投入(null)の旧データは
+ * 従来のカテゴリ概算へフォールバックする（マスタ整備が進めば概算は使われなくなる）。
+ * WIRE-EXM1: ハードコード概算からの本永続化（ExamMaster.points 直読）への昇格。
+ */
 const EXAM_CATEGORY_POINTS: Record<string, number> = {
   生化学: 11,
   血液学: 21,
@@ -84,12 +89,21 @@ const EXAM_CATEGORY_POINTS: Record<string, number> = {
   尿: 26,
   一般: 26,
 };
-function examPoints(category?: string | null): number {
+/** 旧データ用のカテゴリ概算（ExamMaster.points が null のときだけ使う後方互換フォールバック）。 */
+function examPointsFromCategory(category?: string | null): number {
   if (!category) return 11;
   for (const [key, points] of Object.entries(EXAM_CATEGORY_POINTS)) {
     if (category.includes(key)) return points;
   }
   return 11;
+}
+/**
+ * 点数解決（段階移行）: ExamMaster.points を優先し、null なら従来のカテゴリ概算へ。
+ * @param points ExamMaster.points（保険点数概算カラム / 正本ではない）
+ * @param category points が無い旧データのフォールバック判定に使用
+ */
+function resolveExamPoints(points: number | null | undefined, category?: string | null): number {
+  return points ?? examPointsFromCategory(category);
 }
 
 /**
@@ -121,6 +135,7 @@ export async function searchExamMaster(q: string): Promise<ExamCandidate[]> {
         refLow: true,
         refHigh: true,
         unit: true,
+        points: true,
       },
     });
     return exams.map((e) => ({
@@ -133,7 +148,8 @@ export async function searchExamMaster(q: string): Promise<ExamCandidate[]> {
       refLow: e.refLow ?? undefined,
       refHigh: e.refHigh ?? undefined,
       unit: e.unit ?? undefined,
-      points: examPoints(e.category),
+      // 段階移行: ExamMaster.points を正本に、未投入(null)はカテゴリ概算へフォールバック。
+      points: resolveExamPoints(e.points, e.category),
     }));
   } catch (err) {
     console.error('[orders/exam] searchExamMaster failed (fail-soft):', err);
@@ -193,11 +209,36 @@ export async function createExamOrder(input: ExamOrderInput): Promise<ExamOrderR
     const seq = (await prisma.order.count({ where: { createdAt: { gte: dayStart } } })) + 1;
     const orderNo = formatOrderNo(new Date(), seq);
 
-    // EXAM 判別共用体（order-detail）— JLAC を items に保持。
+    // 点数は ExamMaster.points を正とする（段階移行）。examMasterId 付きの行は
+    // クライアント入力値に依らずマスタの拡張カラムから再解決し、null は概算へフォールバック。
+    // fail-soft: 取得失敗時はクライアント値→概算の順で温存（算定はレセコン委譲＝display-only）。
+    const masterIds = Array.from(
+      new Set(lines.map((l) => l.examMasterId).filter((id): id is string => !!id)),
+    );
+    const masterById = new Map<string, { category: string; points: number | null }>();
+    if (masterIds.length > 0) {
+      try {
+        const masters = await prisma.examMaster.findMany({
+          where: { id: { in: masterIds } },
+          select: { id: true, category: true, points: true },
+        });
+        for (const m of masters) masterById.set(m.id, { category: m.category, points: m.points });
+      } catch (err) {
+        console.error('[createExamOrder] examMaster.findMany failed (fail-soft):', err);
+      }
+    }
+    /** 行の点数を ExamMaster.points 正本で解決（マスタ未取得時はクライアント値→概算）。 */
+    const pointsForLine = (l: ExamOrderLineInput): number => {
+      const m = l.examMasterId ? masterById.get(l.examMasterId) : undefined;
+      if (m) return resolveExamPoints(m.points, m.category);
+      return l.points ?? examPointsFromCategory(undefined);
+    };
+
+    // EXAM 判別共用体（order-detail）— JLAC を items に保持。points は ExamMaster.points 正本。
     const items: ExamItem[] = lines.map((l) => ({
       examMasterId: l.examMasterId,
       examName: l.name,
-      points: l.points,
+      points: pointsForLine(l),
     }));
 
     const order = await prisma.order.create({

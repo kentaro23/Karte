@@ -91,11 +91,17 @@ async function loadUsers(): Promise<{ rows: UserRow[]; live: boolean }> {
           orderBy: { createdAt: 'desc' },
           take: 1,
         },
+        // パスワード更新履歴（追記専用）— 最新 1 件を「PW更新」表示に使う。
+        passwordChanges: {
+          orderBy: { changedAt: 'desc' },
+          take: 1,
+        },
       },
     });
     if (users.length === 0) return { rows: demoUsers(), live: false };
     const rows: UserRow[] = users.map((u) => {
       const last = u.sessions[0];
+      const lastPwChange = u.passwordChanges[0];
       return {
         id: u.id,
         staffNo: u.staffNo,
@@ -108,7 +114,10 @@ async function loadUsers(): Promise<{ rows: UserRow[]; live: boolean }> {
         lockedAt: u.credential?.lockedAt ?? null,
         mustChange: u.credential?.mustChange ?? false,
         failedAttempts: u.credential?.failedAttempts ?? 0,
-        pwUpdatedAt: u.credential?.validFrom ?? u.credential?.updatedAt ?? null,
+        // PW更新は PasswordChangeHistory（追記専用）の最新を優先。
+        // 履歴が未生成の既存ユーザーは credential の validFrom / updatedAt に後方互換フォールバック。
+        pwUpdatedAt:
+          lastPwChange?.changedAt ?? u.credential?.validFrom ?? u.credential?.updatedAt ?? null,
         pwExpiresAt: u.credential?.expiresAt ?? null,
         lastLoginAt: last?.createdAt ?? null,
         lastTerminal: last?.terminalId ?? null,
@@ -326,7 +335,8 @@ export default async function UsersPage() {
           </table>
         </div>
         <p className="mt-2 text-2xs text-muted">
-          ※ 最終ログインは `AuthSession`、パスワード更新は `StaffCredential`（validFrom / expiresAt / mustChange）由来。
+          ※ 最終ログインは `AuthSession`、PW更新は `PasswordChangeHistory`（追記専用・最新の changedAt）由来、
+          有効期限は `StaffCredential`（expiresAt / mustChange）。
           全操作の詳細履歴は <span className="font-mono">/audit</span>（ハッシュ連鎖・改竄検知）で確認できます。
         </p>
       </Panel>

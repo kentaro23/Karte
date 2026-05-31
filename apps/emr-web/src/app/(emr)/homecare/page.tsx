@@ -1,4 +1,4 @@
-import { prisma } from '@medixus/db';
+import { prisma, type HomeVisitKind } from '@medixus/db';
 import { age } from '@medixus/domain';
 import { Panel, PanelHeader, Badge, Icon, Button, Field, Input, Select, EmptyState } from '@medixus/ui';
 import { PageBody, PageHeader } from '@/components/page';
@@ -32,6 +32,14 @@ function parseVisitKind(comment: string | null): string {
   return m?.[1] ?? 'DOCTOR';
 }
 
+/**
+ * Prisma enum HomeVisitKind を画面の訪問種別コードへ逆写像（visitKindLabel が解釈する語彙）。
+ * HOME_CARE_GUIDANCE → CARE_GUIDANCE。それ以外は同名コードをそのまま使う。
+ */
+function homeVisitKindToUi(kind: HomeVisitKind): string {
+  return kind === 'HOME_CARE_GUIDANCE' ? 'CARE_GUIDANCE' : kind;
+}
+
 function visitKindLabel(v: string): string {
   switch (v) {
     case 'NURSE':
@@ -40,6 +48,10 @@ function visitKindLabel(v: string): string {
       return '居宅療養管理指導';
     case 'REHAB':
       return '訪問リハビリ';
+    case 'PHARMACIST':
+      return '訪問薬剤管理指導';
+    case 'OTHER':
+      return 'その他訪問';
     default:
       return '医師訪問診療';
   }
@@ -119,7 +131,43 @@ export default async function HomecarePage() {
     dbDown = true;
   }
 
+  // 本永続化された訪問録（HomeVisit）を当日分まとめて取得し、
+  //  - appointmentId 付き → 予約行の訪問種別ソースとして引く（本永続化を優先）
+  //  - appointmentId 無し → オフライン同期で起こした実訪問として一覧へ合流
+  // HomeVisit.appointmentId は scalar（Appointment への back-relation 無し）なので
+  // ここで一度に取得して Map で突き合わせる。fail-soft（落ちても予約は出す）。
+  const hvByAppointment = new Map<string, HomeVisitKind>();
+  const orphanHomeVisits: VisitRow[] = [];
+  try {
+    const hvs = await prisma.homeVisit.findMany({
+      where: { visitedAt: { gte: dayStart, lte: dayEnd } },
+      orderBy: { visitedAt: 'asc' },
+      take: 200,
+      include: { patient: true },
+    });
+    for (const hv of hvs) {
+      if (hv.appointmentId) {
+        // 同一予約に複数あれば最後の visitedAt が勝つ（asc 走査）。
+        hvByAppointment.set(hv.appointmentId, hv.visitKind);
+      } else {
+        orphanHomeVisits.push({
+          appointmentId: null,
+          patientLabel: `${hv.patient.kanjiLastName} ${hv.patient.kanjiFirstName}（${age(hv.patient.dateOfBirth)}）`,
+          patientNo: hv.patient.patientNo,
+          scheduledAt: hv.visitedAt,
+          visitKind: homeVisitKindToUi(hv.visitKind),
+          // 予約外の訪問録は実施済み（受付導線が無いので完了として表示）。
+          status: 'BOOKED',
+          receptionStatus: 'CONSULTATION_DONE',
+        });
+      }
+    }
+  } catch (err) {
+    console.error('[HomecarePage] homeVisit load failed (non-fatal):', err);
+  }
+
   // 当日の訪問予定（Appointment.kind = HOMECARE）。
+  // 予約に紐づく HomeVisit があれば訪問種別をそちらから採用（本永続化を優先）。
   try {
     const rows = await prisma.appointment.findMany({
       where: { kind: 'HOMECARE', scheduledAt: { gte: dayStart, lte: dayEnd } },
@@ -127,18 +175,27 @@ export default async function HomecarePage() {
       take: 100,
       include: { patient: true, encounter: true },
     });
-    visits = rows.map((a) => ({
-      appointmentId: a.id,
-      patientLabel: `${a.patient.kanjiLastName} ${a.patient.kanjiFirstName}（${age(a.patient.dateOfBirth)}）`,
-      patientNo: a.patient.patientNo,
-      scheduledAt: a.scheduledAt,
-      visitKind: parseVisitKind(a.comment),
-      status: a.status,
-      receptionStatus: a.encounter?.receptionStatus ?? null,
-    }));
+    visits = rows.map((a) => {
+      const hvKind = hvByAppointment.get(a.id);
+      return {
+        appointmentId: a.id,
+        patientLabel: `${a.patient.kanjiLastName} ${a.patient.kanjiFirstName}（${age(a.patient.dateOfBirth)}）`,
+        patientNo: a.patient.patientNo,
+        scheduledAt: a.scheduledAt,
+        visitKind: hvKind ? homeVisitKindToUi(hvKind) : parseVisitKind(a.comment),
+        status: a.status,
+        receptionStatus: a.encounter?.receptionStatus ?? null,
+      };
+    });
   } catch (err) {
     console.error('[HomecarePage] visit load failed, demo fallback:', err);
     dbDown = true;
+  }
+
+  // 予約外の本永続化訪問録を合流し、時刻順に整列。
+  if (orphanHomeVisits.length > 0) {
+    visits.push(...orphanHomeVisits);
+    visits.sort((a, b) => a.scheduledAt.getTime() - b.scheduledAt.getTime());
   }
 
   // 実データが無ければデモ予定（DB接続済でも当日未投入なら操作体感のため提示）。

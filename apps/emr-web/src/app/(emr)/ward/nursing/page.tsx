@@ -5,13 +5,22 @@ import { Panel, PanelHeader, Icon, Button, Field, Input, EmptyState, Badge } fro
 import { PageBody, PageHeader } from '@/components/page';
 import { addNursing } from '../actions';
 import { addNursingPlan, addPressureUlcerScore } from './actions';
-import { NURSING_PLAN_DOCTYPE, PRESSURE_ULCER_DOCTYPE } from './constants';
 
 // 受付/カルテ同様、Prisma を読むため明示的に動的化。DB 未接続でもデモが描画される。
 export const dynamic = 'force-dynamic';
 
 type DocRow = { id: string; title: string; body: string; createdAt: Date };
 type Inpatient = { id: string; patientId: string; name: string; age: number };
+
+// 看護計画項目の kind → 表示ラベル（NursingPlanItemKind に対応）。
+const PLAN_KIND_LABEL: Record<string, string> = {
+  DIAGNOSIS: '【看護診断/問題】',
+  GOAL: '【期待される成果（目標）】',
+  INTERVENTION_O: '【看護介入 O（観察）】',
+  INTERVENTION_T: '【看護介入 T（ケア）】',
+  INTERVENTION_E: '【看護介入 E（教育）】',
+  EVALUATION: '【評価】',
+};
 
 // ── デモ（DB未接続）用の決定論サンプル ──────────────────────────────────────
 const DEMO_INPATIENTS: Inpatient[] = [
@@ -60,15 +69,13 @@ function demoUlcer(patientId: string): DocRow[] {
   ];
 }
 
-/** docType 別に追記履歴を読む。DB無/未登録かつデモ患者ならサンプルを返す。 */
-async function loadDocs(
-  patientId: string,
-  docType: string,
-  demo: (pid: string) => DocRow[],
-): Promise<{ rows: DocRow[]; demo: boolean; dbDown: boolean }> {
+type Loaded = { rows: DocRow[]; demo: boolean; dbDown: boolean };
+
+/** 看護記録（ClinicalDocument・WRD1 所有の追記）を読む。DB無/未登録かつデモ患者ならサンプル。 */
+async function loadNursing(patientId: string): Promise<Loaded> {
   try {
     const docs = await prisma.clinicalDocument.findMany({
-      where: { patientId, docType },
+      where: { patientId, docType: '看護記録' },
       orderBy: { createdAt: 'desc' },
       take: 30,
     });
@@ -79,12 +86,76 @@ async function loadDocs(
       createdAt: r.createdAt,
     }));
     if (rows.length === 0 && patientId.startsWith('demo-')) {
-      return { rows: demo(patientId), demo: true, dbDown: false };
+      return { rows: demoNursing(patientId), demo: true, dbDown: false };
     }
     return { rows, demo: false, dbDown: false };
   } catch (err) {
-    console.error(`[NursingPage] load ${docType} failed, demo fallback:`, err);
-    return { rows: demo(patientId || 'demo-pat-1'), demo: true, dbDown: true };
+    console.error('[NursingPage] load 看護記録 failed, demo fallback:', err);
+    return { rows: demoNursing(patientId || 'demo-pat-1'), demo: true, dbDown: true };
+  }
+}
+
+/** 看護計画を NursingPlan(+items) から読み、kind 順に整形して履歴表示用 DocRow にする。 */
+async function loadPlans(patientId: string): Promise<Loaded> {
+  try {
+    const plans = await prisma.nursingPlan.findMany({
+      where: { patientId },
+      orderBy: { createdAt: 'desc' },
+      take: 30,
+      include: { items: { orderBy: { sortOrder: 'asc' } } },
+    });
+    const rows: DocRow[] = plans.map((p) => ({
+      id: p.id,
+      title: p.title ?? '看護計画',
+      body: p.items
+        .map((it) => `${PLAN_KIND_LABEL[it.kind] ?? `【${it.kind}】`}\n${it.content}`)
+        .join('\n\n'),
+      createdAt: p.createdAt,
+    }));
+    if (rows.length === 0 && patientId.startsWith('demo-')) {
+      return { rows: demoPlan(patientId), demo: true, dbDown: false };
+    }
+    return { rows, demo: false, dbDown: false };
+  } catch (err) {
+    console.error('[NursingPage] load NursingPlan failed, demo fallback:', err);
+    return { rows: demoPlan(patientId || 'demo-pat-1'), demo: true, dbDown: true };
+  }
+}
+
+/** 褥瘡 DESIGN-R 評価を PressureUlcer から読み、推移表示用 DocRow にする（追記専用）。 */
+async function loadUlcers(patientId: string): Promise<Loaded> {
+  try {
+    const rows0 = await prisma.pressureUlcer.findMany({
+      where: { patientId },
+      orderBy: { assessedOn: 'desc' },
+      take: 30,
+    });
+    const rows: DocRow[] = rows0.map((u) => ({
+      id: u.id,
+      title: `褥瘡DESIGN-R ${u.totalScore}点`,
+      body: [
+        u.site && `部位: ${u.site}`,
+        `合計（Depth除く）: ${u.totalScore} 点`,
+        '',
+        `Depth 深さ: ${u.depth}（${u.depthScore}）`,
+        `Exudate 滲出液: ${u.exudateScore}`,
+        `Size 大きさ: ${u.sizeScore}`,
+        `Inflammation 炎症/感染: ${u.inflammationScore}`,
+        `Granulation 肉芽組織: ${u.granulationScore}`,
+        `Necrotic tissue 壊死組織: ${u.necroticScore}`,
+        `Pocket ポケット: ${u.pocketScore}`,
+      ]
+        .filter((l) => l !== undefined && l !== false)
+        .join('\n'),
+      createdAt: u.assessedOn,
+    }));
+    if (rows.length === 0 && patientId.startsWith('demo-')) {
+      return { rows: demoUlcer(patientId), demo: true, dbDown: false };
+    }
+    return { rows, demo: false, dbDown: false };
+  } catch (err) {
+    console.error('[NursingPage] load PressureUlcer failed, demo fallback:', err);
+    return { rows: demoUlcer(patientId || 'demo-pat-1'), demo: true, dbDown: true };
   }
 }
 
@@ -135,17 +206,16 @@ export default async function NursingPage({
 
   const selected = inpatients.find((e) => e.patientId === patientId) ?? null;
 
-  // 看護記録・看護計画・褥瘡DESIGN-R の追記履歴。
-  type Loaded = Awaited<ReturnType<typeof loadDocs>>;
+  // 看護記録(ClinicalDocument)・看護計画(NursingPlan)・褥瘡DESIGN-R(PressureUlcer) の追記履歴。
   const empty: Loaded = { rows: [], demo: false, dbDown: false };
   let nursing: Loaded = empty;
   let plans: Loaded = empty;
   let ulcers: Loaded = empty;
   if (patientId) {
     [nursing, plans, ulcers] = await Promise.all([
-      loadDocs(patientId, '看護記録', demoNursing),
-      loadDocs(patientId, NURSING_PLAN_DOCTYPE, demoPlan),
-      loadDocs(patientId, PRESSURE_ULCER_DOCTYPE, demoUlcer),
+      loadNursing(patientId),
+      loadPlans(patientId),
+      loadUlcers(patientId),
     ]);
     if (nursing.dbDown || plans.dbDown || ulcers.dbDown) dbDown = true;
   }

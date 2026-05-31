@@ -1,6 +1,6 @@
 'use server';
 import { revalidatePath } from 'next/cache';
-import { prisma } from '@medixus/db';
+import { prisma, type HomeVisitKind } from '@medixus/db';
 import { writeAudit } from '@medixus/audit';
 import { storeRecord, shareToRegionalNetwork } from '@medixus/interop';
 import { requireSession } from '@/lib/session';
@@ -53,6 +53,36 @@ async function resolveHomecareDepartment(): Promise<string | null> {
 }
 
 /**
+ * UI の訪問種別コード（DOCTOR/NURSE/CARE_GUIDANCE/REHAB …）を
+ * Prisma enum HomeVisitKind（DOCTOR/NURSE/HOME_CARE_GUIDANCE/REHAB/PHARMACIST/OTHER）へ写像。
+ * 未知値は OTHER に丸める（端末側の語彙ズレに対する後方互換）。
+ */
+const HOME_VISIT_KIND_MAP: Record<string, HomeVisitKind> = {
+  DOCTOR: 'DOCTOR',
+  NURSE: 'NURSE',
+  CARE_GUIDANCE: 'HOME_CARE_GUIDANCE',
+  HOME_CARE_GUIDANCE: 'HOME_CARE_GUIDANCE',
+  REHAB: 'REHAB',
+  PHARMACIST: 'PHARMACIST',
+  OTHER: 'OTHER',
+};
+
+function toHomeVisitKind(v: string | null | undefined): HomeVisitKind {
+  if (!v) return 'DOCTOR';
+  return HOME_VISIT_KIND_MAP[v] ?? 'OTHER';
+}
+
+/** Prisma の unique 制約違反（P2002）か判定（clientId 冪等再同期の検出用）。 */
+function isUniqueViolation(err: unknown): boolean {
+  return (
+    !!err &&
+    typeof err === 'object' &&
+    'code' in err &&
+    (err as { code?: unknown }).code === 'P2002'
+  );
+}
+
+/**
  * 訪問予定を作成する。
  * Appointment（種別 HOMECARE）と、それに紐づく Encounter(HOMECARE / 非対面でない実訪問=FACE) を生成。
  * 業務ルール（FR-HOM-01 AC2）：訪問スケジュールとして一覧／カレンダーに載る。
@@ -86,7 +116,7 @@ export async function scheduleVisit(formData: FormData) {
       },
     });
     // 訪問の Encounter を予約に紐付けて先行生成（HOMECARE / 実訪問=FACE）。
-    await prisma.encounter.create({
+    const enc = await prisma.encounter.create({
       data: {
         patientId,
         appointmentId: appt.id,
@@ -97,6 +127,24 @@ export async function scheduleVisit(formData: FormData) {
         receptionStatus: 'UNRECEIVED',
       },
     });
+    // 任意で HomeVisit を先行生成（予定として確定。本文は訪問先で追記/同期される想定）。
+    // 予約由来なので syncState=SYNCED、訪問種別を保持。本永続化の一覧はこのモデルを起点に集約。
+    try {
+      await prisma.homeVisit.create({
+        data: {
+          patientId,
+          encounterId: enc.id,
+          appointmentId: appt.id,
+          visitKind: toHomeVisitKind(visitKind),
+          visitedAt: scheduledAt,
+          note: comment || null,
+          syncState: 'SYNCED',
+          recordedByUserId: s.userId,
+        },
+      });
+    } catch (e) {
+      console.error('[scheduleVisit] homeVisit pre-create (non-fatal):', e);
+    }
     await writeAudit({
       actorUserId: s.userId,
       patientId,
@@ -169,8 +217,10 @@ export async function cancelVisit(formData: FormData) {
 /**
  * FR-HOM-01 AC1：オフライン記録の復帰後同期。
  * タブレットが localStorage に貯めた訪問録（複数件）を一括登録する。
- * 1件ずつ HOMECARE Encounter（非来院=訪問録）として保存し、成功 clientId を返す。
- * 1件失敗しても残りは続行（部分成功）。clientId 単位の冪等同期。
+ * 1件ずつ HOMECARE Encounter（非来院=訪問録）を確定し、note(SOAP本文)/vitals を
+ * HomeVisit（追記専用・syncState=OFFLINE_QUEUED）へ本永続化する。成功 clientId を返す。
+ * 冪等：HomeVisit.clientId の一意制約（再同期は既存検出 or P2002 を success 扱い）。
+ * 1件失敗しても残りは続行（部分成功）。
  */
 export async function syncOfflineRecords(records: SyncedVisitRecord[]): Promise<SyncOutcome> {
   if (!Array.isArray(records) || records.length === 0) {
@@ -211,6 +261,20 @@ export async function syncOfflineRecords(records: SyncedVisitRecord[]): Promise<
     }
     try {
       const visitedAt = new Date(r.visitedAt);
+      const at = isNaN(visitedAt.getTime()) ? new Date() : visitedAt;
+
+      // 端末由来の冪等同期：clientId 既存（P2002）なら HomeVisit を作らず既存扱い。
+      // 追記専用モデルのため訂正は新規 INSERT（update しない）。
+      const existing = await prisma.homeVisit
+        .findUnique({ where: { clientId: r.clientId } })
+        .catch(() => null);
+      if (existing) {
+        // 再同期：サーバ側に確定済み。端末キューから除去させる（成功扱い）。
+        syncedIds.push(r.clientId);
+        continue;
+      }
+
+      // 訪問録は HOMECARE の Encounter（非来院＝訪問録）として確定し、HomeVisit に本永続化。
       const enc = await prisma.encounter.create({
         data: {
           patientId: r.patientId,
@@ -219,15 +283,41 @@ export async function syncOfflineRecords(records: SyncedVisitRecord[]): Promise<
           contactType: 'FACE',
           departmentId,
           receptionStatus: 'CONSULTATION_DONE',
-          arrivedAt: isNaN(visitedAt.getTime()) ? new Date() : visitedAt,
+          arrivedAt: at,
         },
       });
-      // 訪問録本文は ClinicalSession/Note を持たない簡易同期のため監査へ要約を残す。
+
+      // 本永続化：note(SOAP本文)/vitals を HomeVisit へ昇格（旧実装は監査 detail / SS-MIX2 退避のみ）。
+      // syncState=OFFLINE_QUEUED で「後追い同期由来」を明示。clientId 一意制約で冪等。
+      try {
+        await prisma.homeVisit.create({
+          data: {
+            patientId: r.patientId,
+            encounterId: enc.id,
+            visitKind: toHomeVisitKind(r.visitKind),
+            visitedAt: at,
+            note: r.note || null,
+            vitals: r.vitals || null,
+            syncState: 'OFFLINE_QUEUED',
+            clientId: r.clientId,
+            recordedByUserId: s.userId,
+          },
+        });
+      } catch (e) {
+        // 競合（多重タブ/二重送信）で clientId が同時 INSERT された場合は既存扱い＝成功。
+        if (isUniqueViolation(e)) {
+          syncedIds.push(r.clientId);
+          continue;
+        }
+        throw e;
+      }
+
+      // 監査：本永続化（HomeVisit）への CHART_WRITE。本文は HomeVisit.note が一次ソース。
       await writeAudit({
         actorUserId: s.userId,
         patientId: r.patientId,
         action: 'CHART_WRITE',
-        resource: `Encounter.homecare.offlineSync(${r.visitKind})`,
+        resource: `HomeVisit.offlineSync(${r.visitKind})`,
         resourceId: enc.id,
       });
       // 多職種連携：SS-MIX2/地域連携シームへ蓄積（STUB）。失敗は同期成否に影響させない。
@@ -235,7 +325,7 @@ export async function syncOfflineRecords(records: SyncedVisitRecord[]): Promise<
         await storeRecord({
           patientRef: r.patientId,
           dataType: 'DIAGNOSIS',
-          observedAt: isNaN(visitedAt.getTime()) ? new Date().toISOString() : visitedAt.toISOString(),
+          observedAt: at.toISOString(),
           payload: { kind: r.visitKind, note: r.note, vitals: r.vitals ?? null },
         });
       } catch (e) {

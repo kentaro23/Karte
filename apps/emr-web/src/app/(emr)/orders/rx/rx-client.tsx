@@ -6,32 +6,18 @@ import {
   issueRxOrder,
   confirmRxOrder,
   loadLastPrescription,
+  saveOrderSet,
   type RxLineInput,
   type DispenseType,
+  type RxOrderSet,
 } from './actions';
-
-/* 用法マスタ（内服[1-4回]/頓服/外用）。値が処方箋に反映される（FR-RX-01 AC1）。 */
-const USAGES: { value: string; label: string; group: '内服' | '頓服' | '外用' }[] = [
-  { value: '毎食後', label: '内服・毎食後（1日3回）', group: '内服' },
-  { value: '毎食前', label: '内服・毎食前（1日3回）', group: '内服' },
-  { value: '朝食後', label: '内服・朝食後（1日1回）', group: '内服' },
-  { value: '朝夕食後', label: '内服・朝夕食後（1日2回）', group: '内服' },
-  { value: '就寝前', label: '内服・就寝前（1日1回）', group: '内服' },
-  { value: '8時間毎', label: '内服・8時間毎（1日3回）', group: '内服' },
-  { value: '頓用', label: '頓服・頓用', group: '頓服' },
-  { value: '発熱時頓用', label: '頓服・発熱時', group: '頓服' },
-  { value: '疼痛時頓用', label: '頓服・疼痛時', group: '頓服' },
-  { value: '外用', label: '外用', group: '外用' },
-];
-
-const USAGE_TPD: Record<string, number> = {
-  毎食後: 3,
-  毎食前: 3,
-  朝食後: 1,
-  朝夕食後: 2,
-  就寝前: 1,
-  '8時間毎': 3,
-};
+import {
+  FALLBACK_USAGES,
+  usageIsAsNeeded,
+  usageDefaultTpd,
+  type UsageOption,
+} from './constants';
+import { IndicationDialog, type IndicationTarget } from './indication-dialog';
 
 type Drug = {
   id: string;
@@ -55,20 +41,40 @@ function isOralRoute(route: string): boolean {
   const r = (route ?? '').toUpperCase();
   return r === 'PO' || r === 'ORAL' || route === '内服' || route === '経口' || route.includes('内服');
 }
-function isAsNeeded(usage: string): boolean {
-  return usage.includes('頓');
+/** 院外内服で日数必須なのに未入力 → 保存ブロック対象（FR-RXSAFE-03）。
+ *  頓服判定は UsageMaster.isAsNeeded（usages）を第一の真実とする。 */
+function lineNeedsDays(l: Line, usages: UsageOption[]): boolean {
+  return (
+    l.dispenseType === 'OUT_OF_HOUSE' &&
+    isOralRoute(l.route) &&
+    !usageIsAsNeeded(l.usage, usages)
+  );
 }
-/** 院外内服で日数必須なのに未入力 → 保存ブロック対象（FR-RXSAFE-03）。 */
-function lineNeedsDays(l: Line): boolean {
-  return l.dispenseType === 'OUT_OF_HOUSE' && isOralRoute(l.route) && !isAsNeeded(l.usage);
-}
-function lineHasError(l: Line): boolean {
+function lineHasError(l: Line, usages: UsageOption[]): boolean {
   if (!l.usage || !l.usage.trim()) return true;
-  return lineNeedsDays(l) && (!Number.isFinite(l.days) || l.days <= 0);
+  return lineNeedsDays(l, usages) && (!Number.isFinite(l.days) || l.days <= 0);
 }
 
-export function RxClient({ patients, drugs }: { patients: Patient[]; drugs: Drug[] }) {
+export function RxClient({
+  patients,
+  drugs,
+  usages: usagesProp,
+  initialSets,
+}: {
+  patients: Patient[];
+  drugs: Drug[];
+  /** 用法マスタ（UsageMaster 由来。未指定/空ならフォールバック）。 */
+  usages?: UsageOption[];
+  /** 永続化済みの処方セット（OrderSet kind:RX 由来）。 */
+  initialSets?: RxOrderSet[];
+}) {
   const router = useRouter();
+
+  // 用法は UsageMaster（サーバ読込）を第一の真実に、空時のみフォールバック。
+  const usages = React.useMemo<UsageOption[]>(
+    () => (usagesProp && usagesProp.length > 0 ? usagesProp : FALLBACK_USAGES),
+    [usagesProp],
+  );
 
   const [patientId, setPatientId] = React.useState(patients[0]?.id ?? '');
   const [lines, setLines] = React.useState<Line[]>([]);
@@ -77,9 +83,9 @@ export function RxClient({ patients, drugs }: { patients: Patient[]; drugs: Drug
   const [query, setQuery] = React.useState('');
   const [drugId, setDrugId] = React.useState(drugs[0]?.id ?? '');
   const [dose, setDose] = React.useState(1);
-  const [tpd, setTpd] = React.useState(3);
+  const [tpd, setTpd] = React.useState(usages[0]?.defaultTimesPerDay ?? 3);
   const [days, setDays] = React.useState(7);
-  const [usage, setUsage] = React.useState('毎食後');
+  const [usage, setUsage] = React.useState(usages[0]?.value ?? '');
   const [dispense, setDispense] = React.useState<DispenseType>('IN_HOUSE');
   const [isTemporary, setIsTemporary] = React.useState(false);
   const [isOnePackage, setIsOnePackage] = React.useState(false);
@@ -87,10 +93,17 @@ export function RxClient({ patients, drugs }: { patients: Patient[]; drugs: Drug
 
   const [pending, start] = React.useTransition();
   // 呼び出したセットの識別子。発行時に Order.setId として記録（FR-RX-02）。
+  // 値は永続化された OrderSet.id（既存 Order.setId 配線がそのまま生きる）。
   const [setIdInput, setSetIdInput] = React.useState<string | null>(null);
-  const [savedSets, setSavedSets] = React.useState<{ id: string; name: string; lines: Line[] }[]>([]);
+  // 処方セット一覧（OrderSet kind:RX）。初期値はサーバ読込。保存時に追記。
+  const [savedSets, setSavedSets] = React.useState<RxOrderSet[]>(initialSets ?? []);
   const [msg, setMsg] = React.useState<string | null>(null);
   const [blockedKeys, setBlockedKeys] = React.useState<Set<string>>(new Set());
+
+  // ── 適応症ダイアログ（DISEASE_CONTRA 解消）状態 ──
+  const [indicationTarget, setIndicationTarget] = React.useState<IndicationTarget | null>(null);
+  // ダイアログで解消/強行した DISEASE_CONTRA finding を画面から畳むためのキー集合。
+  const [resolvedFindingKeys, setResolvedFindingKeys] = React.useState<Set<string>>(new Set());
 
   const [result, setResult] = React.useState<null | {
     prescriptionId: string | null;
@@ -111,10 +124,11 @@ export function RxClient({ patients, drugs }: { patients: Patient[]; drugs: Drug
   }, [drugs, query]);
   const selected = drugs.find((d) => d.id === drugId);
 
-  // 用法を選ぶと内服回数を自動補完。頓服/外用は日数任意。
+  // 用法を選ぶと内服回数を自動補完（UsageMaster.defaultTimesPerDay）。頓服/外用は日数任意。
   function pickUsage(v: string) {
     setUsage(v);
-    if (USAGE_TPD[v]) setTpd(USAGE_TPD[v]!);
+    const tpdDefault = usageDefaultTpd(v, usages);
+    if (tpdDefault) setTpd(tpdDefault);
   }
 
   function addLine() {
@@ -159,10 +173,10 @@ export function RxClient({ patients, drugs }: { patients: Patient[]; drugs: Drug
     setResult(null);
   }
 
-  // クライアント側の保存ブロック判定（即時赤表示）。
+  // クライアント側の保存ブロック判定（即時赤表示）。頓服判定は UsageMaster 由来。
   const clientBlocked = React.useMemo(
-    () => new Set(lines.filter(lineHasError).map((l) => l.key)),
-    [lines],
+    () => new Set(lines.filter((l) => lineHasError(l, usages)).map((l) => l.key)),
+    [lines, usages],
   );
   const effectiveBlocked = React.useMemo(() => {
     const s = new Set(blockedKeys);
@@ -196,6 +210,7 @@ export function RxClient({ patients, drugs }: { patients: Patient[]; drugs: Drug
       }
       setBlockedKeys(new Set());
       setConfirmMsg(null);
+      setResolvedFindingKeys(new Set()); // 新チェック結果なので解消マークをリセット
       if (r.summary) {
         setResult({
           prescriptionId: r.prescriptionId,
@@ -255,23 +270,90 @@ export function RxClient({ patients, drugs }: { patients: Patient[]; drugs: Drug
     });
   }
 
-  // セット登録/呼出（クライアント保持 — Order.setId 連携の UI 側）。
+  // セット登録/呼出（OrderSet kind:RX へ本永続化 — Order.setId 連携）。
   function saveSet() {
     if (lines.length === 0) {
       setMsg('セットに保存する明細がありません。');
       return;
     }
     const name = `セット${savedSets.length + 1}（${lines.map((l) => l.drugName).slice(0, 2).join('・')}…）`;
-    setSavedSets((s) => [...s, { id: `set-${Date.now()}`, name, lines: lines.map((l) => ({ ...l })) }]);
-    setMsg('現在の処方をセット保存しました。');
+    const snapshot = lines.map((l) => ({ ...l }));
+    start(async () => {
+      const r = await saveOrderSet({ name, lines: snapshot });
+      if (!r.ok) {
+        setMsg(r.error ?? 'セットの保存に失敗しました。');
+        return;
+      }
+      // 永続化された OrderSet を一覧へ反映（呼出で Order.setId に使う id を保持）。
+      const persistedLines = snapshot.map((l) => ({
+        drugProductId: l.drugProductId,
+        dosePerTime: l.dosePerTime,
+        doseUnit: l.doseUnit,
+        timesPerDay: l.timesPerDay,
+        days: l.days,
+        route: l.route,
+        usage: l.usage,
+        dispenseType: l.dispenseType,
+        isTemporary: l.isTemporary,
+        isOnePackage: l.isOnePackage,
+        isOffLabel: l.isOffLabel,
+      }));
+      // デモ時は setId が null。一覧表示できるよう一時 id を採番（呼出時は Order.setId へ）。
+      const newId = r.setId ?? `set-local-${Date.now()}`;
+      setSavedSets((s) => [...s, { id: newId, name, lines: persistedLines }]);
+      // 直近で保存したセットを「呼出中」にしておくと、続けて発行すれば setId が載る。
+      setSetIdInput(r.setId);
+      setMsg(r.note ?? '現在の処方を処方セットとして保存しました。');
+    });
   }
   function loadSet(id: string) {
     const set = savedSets.find((s) => s.id === id);
     if (!set) return;
-    setLines(set.lines.map((l) => ({ ...l, key: newKey() })));
-    setSetIdInput(set.id); // 発行時に Order.setId へ記録
+    // OrderSetItem には drugName が無い（usageCode/用量のみ）。表示名は薬剤マスタから解決。
+    setLines(
+      set.lines.map((l) => {
+        const d = drugs.find((x) => x.id === l.drugProductId);
+        return {
+          key: newKey(),
+          drugProductId: l.drugProductId,
+          drugName: d?.brandName ?? '（薬剤）',
+          dosePerTime: l.dosePerTime,
+          doseUnit: l.doseUnit || d?.strengthUnit || '錠',
+          timesPerDay: l.timesPerDay,
+          days: l.days,
+          route: l.route || d?.administrationRoute || 'PO',
+          usage: l.usage,
+          dispenseType: l.dispenseType,
+          isTemporary: l.isTemporary,
+          isOnePackage: l.isOnePackage,
+          isOffLabel: l.isOffLabel,
+        };
+      }),
+    );
+    // 永続化 OrderSet.id のみ Order.setId に載せる（ローカル一時 id は載せない）。
+    setSetIdInput(id.startsWith('set-local-') ? null : id);
     setMsg(`${set.name} を呼び出しました。`);
     setResult(null);
+  }
+
+  // 適応症ダイアログを開く（DISEASE_CONTRA finding から対象薬剤を解決）。
+  function openIndicationDialog(finding: Finding, ruleCheckResultId: string | null) {
+    if (!patientId) {
+      setMsg('患者を選択してください');
+      return;
+    }
+    // finding.message は engine 側で `${drugName}: …` 形式。薬剤名を取り出す。
+    const idx = finding.message.indexOf(':');
+    const drugName = (idx > 0 ? finding.message.slice(0, idx) : finding.message).trim();
+    // 明細から該当薬剤の drugProductId を解決（名前一致 — 同名は先頭採用）。
+    const line = lines.find((l) => l.drugName === drugName) ?? lines.find((l) => drugName.includes(l.drugName));
+    setIndicationTarget({
+      patientId,
+      drugName,
+      drugProductId: line?.drugProductId ?? '',
+      ruleCheckResultId,
+      prescriptionId: result?.prescriptionId ?? null,
+    });
   }
 
   return (
@@ -325,7 +407,7 @@ export function RxClient({ patients, drugs }: { patients: Patient[]; drugs: Drug
           <label className="mb-1 block">
             <span className="mb-0.5 block text-2xs font-semibold text-muted">用法</span>
             <Select value={usage} onChange={(e) => pickUsage(e.target.value)}>
-              {USAGES.map((u) => (
+              {usages.map((u) => (
                 <option key={u.value} value={u.value}>
                   {u.label}
                 </option>
@@ -467,7 +549,9 @@ export function RxClient({ patients, drugs }: { patients: Patient[]; drugs: Drug
             <tbody>
               {lines.map((l) => {
                 const err = effectiveBlocked.has(l.key);
-                const needDays = lineNeedsDays(l);
+                const needDays = lineNeedsDays(l, usages);
+                // 用法マスタに無い既存コード（セット/Do 由来）も選択肢に残す。
+                const usageInMaster = usages.some((u) => u.value === l.usage);
                 return (
                   <tr
                     key={l.key}
@@ -483,12 +567,13 @@ export function RxClient({ patients, drugs }: { patients: Patient[]; drugs: Drug
                         onChange={(e) =>
                           patchLine(l.key, {
                             usage: e.target.value,
-                            timesPerDay: USAGE_TPD[e.target.value] ?? l.timesPerDay,
+                            timesPerDay: usageDefaultTpd(e.target.value, usages) ?? l.timesPerDay,
                           })
                         }
                         className="!w-28 !py-0.5 text-2xs"
                       >
-                        {USAGES.map((u) => (
+                        {!usageInMaster && l.usage && <option value={l.usage}>{l.usage}</option>}
+                        {usages.map((u) => (
                           <option key={u.value} value={u.value}>
                             {u.value}
                           </option>
@@ -594,12 +679,35 @@ export function RxClient({ patients, drugs }: { patients: Patient[]; drugs: Drug
               </div>
               {result.note && <p className="mb-1 text-2xs text-muted">{result.note}</p>}
               {result.findings.map((f, i) => {
-                const rid = result.persistedIds[i] ?? `f-${i}`;
+                const rcrId = result.persistedIds[i] ?? null;
+                const rid = rcrId ?? `f-${i}`;
                 const tone = f.result === 'BLOCKED' ? 'red' : f.result === 'WARNING' ? 'amber' : 'green';
+                // 適応症未付与（DISEASE_CONTRA WARNING）はワンクリック病名登録の導線を出す。
+                const isUnindicated = f.checkType === 'DISEASE_CONTRA' && f.result === 'WARNING';
+                const resolved = resolvedFindingKeys.has(rid);
                 return (
-                  <div key={rid} className="mb-1 rounded border border-line p-1.5 text-xs">
-                    <Badge tone={tone as 'red' | 'amber' | 'green'}>{f.checkType}</Badge>
+                  <div
+                    key={rid}
+                    className={`mb-1 rounded border p-1.5 text-xs ${
+                      resolved ? 'border-line bg-accent-50/60 opacity-70' : 'border-line'
+                    }`}
+                  >
+                    <Badge tone={resolved ? 'green' : (tone as 'red' | 'amber' | 'green')}>
+                      {f.checkType}
+                    </Badge>
+                    {resolved && <Badge tone="green">解消済</Badge>}
                     <div className="mt-0.5">{f.message}</div>
+                    {isUnindicated && !resolved && (
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        className="mt-1"
+                        disabled={pending}
+                        onClick={() => openIndicationDialog(f, rcrId)}
+                      >
+                        <Icon name="check" size={12} /> 適応症（病名）を登録
+                      </Button>
+                    )}
                     {f.result === 'BLOCKED' && (
                       <input
                         placeholder="解除理由（必須・監査記録）"
@@ -638,6 +746,31 @@ export function RxClient({ patients, drugs }: { patients: Patient[]; drugs: Drug
           )}
         </div>
       </Panel>
+
+      {/* 適応症ワンクリック病名登録ダイアログ（DISEASE_CONTRA 解消）。
+          確定で病名登録＆警告解消、強行で理由付きオーバーライド（いずれも当該行を畳む）。 */}
+      <IndicationDialog
+        open={indicationTarget !== null}
+        target={indicationTarget}
+        onClose={() => setIndicationTarget(null)}
+        onResolved={({ resolved, overridden }) => {
+          // 対象 RuleCheckResult.id を解消マーク（画面の当該 finding を畳む）。
+          const rid = indicationTarget?.ruleCheckResultId;
+          if ((resolved || overridden) && rid) {
+            setResolvedFindingKeys((s) => new Set(s).add(rid));
+          }
+          if (resolved || overridden) {
+            setMsg(
+              resolved
+                ? '適応症の病名を登録し、警告を解消しました。'
+                : '病名を付けずに続行しました（理由を記録）。',
+            );
+            router.refresh();
+          }
+          // 解消時はダイアログを閉じる（強行時はダイアログ側で onClose 済み）。
+          if (resolved) setIndicationTarget(null);
+        }}
+      />
     </div>
   );
 }

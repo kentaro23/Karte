@@ -19,10 +19,14 @@ import { JOB_TYPES } from './constants';
  *
  * 監査（別紙3 #25-30）: 登録 / 無効化 / 再有効化 / ロック解除 /
  * パスワード初期化はすべて `writeAudit` で記録する。
- * `AuditAction` enum には利用者管理専用値が無いため、利用者に関する
- * 操作として `USER_SWITCH` を用い、`resource` に具体的な操作種別
- * （StaffUser.create 等）を載せて識別可能にする（settings.ts が
- * RuleSuppression に対し ORDER_CHECK を流用する方針に倣う）。
+ * `AuditAction` enum に利用者管理専用値が追加された（USER_CREATE /
+ * USER_DISABLE / USER_ENABLE / ACCOUNT_UNLOCK / PASSWORD_RESET）ため、
+ * 従来の `USER_SWITCH` 流用から専用値へ昇格する。`resource` には
+ * 具体的なエンティティ操作（StaffUser.create 等）を引き続き載せる。
+ *
+ * パスワード初期化は `PasswordChangeHistory`（追記専用・平文/ハッシュは
+ * 保持しない）に履歴 INSERT を行い、page.tsx の「PW更新」表示はこの
+ * 履歴から取得する。訂正は新規 INSERT で表現し UPDATE はしない。
  *
  * DB 未接続（フロントのみモード）では prisma が到達不可になるため、
  * すべて try/catch でフェイルソフトにし、フォーム送信が 500 に
@@ -85,7 +89,7 @@ export async function createUser(formData: FormData): Promise<void> {
     });
     await writeAudit({
       actorUserId: s.userId,
-      action: 'USER_SWITCH',
+      action: 'USER_CREATE',
       resource: 'StaffUser.create',
       resourceId: row.id,
       detail: { staffNo, loginId, jobType },
@@ -106,7 +110,7 @@ export async function setUserActive(formData: FormData): Promise<void> {
     await prisma.staffUser.update({ where: { id }, data: { isActive: active } });
     await writeAudit({
       actorUserId: s.userId,
-      action: 'USER_SWITCH',
+      action: active ? 'USER_ENABLE' : 'USER_DISABLE',
       resource: active ? 'StaffUser.enable' : 'StaffUser.disable',
       resourceId: id,
       detail: { isActive: active },
@@ -132,7 +136,7 @@ export async function unlockUser(formData: FormData): Promise<void> {
     });
     await writeAudit({
       actorUserId: s.userId,
-      action: 'USER_SWITCH',
+      action: 'ACCOUNT_UNLOCK',
       resource: 'StaffCredential.unlock',
       resourceId: id,
     });
@@ -144,8 +148,10 @@ export async function unlockUser(formData: FormData): Promise<void> {
 
 /**
  * パスワードを初期化する（次回ログイン時に変更を強制）。
- * 平文・ハッシュは扱わず、`mustChange` を立て、パスワード更新履歴の
- * 起点（`validFrom` / `updatedAt`）を更新する。実際の再設定は本人が
+ * 平文・ハッシュは扱わず、`mustChange` を立て、`PasswordChangeHistory`
+ * に履歴（reason: RESET / mustChangeSet: true）を追記専用で INSERT する。
+ * page.tsx の「PW更新」表示はこの履歴から取得する（従来は
+ * `StaffCredential.validFrom / updatedAt` のみ）。実際の再設定は本人が
  * 認証フローで行う（別紙1 §1.1）。
  */
 export async function resetPassword(formData: FormData): Promise<void> {
@@ -157,12 +163,21 @@ export async function resetPassword(formData: FormData): Promise<void> {
       where: { userId: id },
       data: { mustChange: true, validFrom: new Date() },
     });
+    // 追記専用のパスワード更新履歴（訂正＝新規 INSERT・平文/ハッシュは保持しない）。
+    await prisma.passwordChangeHistory.create({
+      data: {
+        userId: id,
+        changedByUserId: s.userId,
+        reason: 'RESET',
+        mustChangeSet: true,
+      },
+    });
     await writeAudit({
       actorUserId: s.userId,
-      action: 'USER_SWITCH',
+      action: 'PASSWORD_RESET',
       resource: 'StaffCredential.resetPassword',
       resourceId: id,
-      detail: { mustChange: true },
+      detail: { mustChange: true, reason: 'RESET' },
     });
   } catch (err) {
     console.error('[admin/users] resetPassword failed (fail-soft):', err);

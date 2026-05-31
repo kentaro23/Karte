@@ -67,8 +67,9 @@ function demoData(): MapData {
 
 /**
  * フェイルソフトなデータ取得 — FR-WRD-01 AC(1)。
- * 在院 Encounter（INPATIENT）を病棟ごとに作成順で病床へ割付け（admissions/page.tsx と同一ロジック）し、
- * 在床/空床・性別ポリシーを描画用に整形する。DB 未接続でもデモへフォールバックする。
+ * 在床は Encounter.currentBedId（本永続化された割当）を正として bedId 直接マッピングで配置する。
+ * currentBedId 未設定の在院（本永続化前データ / デモ）は従来どおり病棟内の在床順カーソルで補完配置する
+ * （入退院画面と同一ロジック）。在床/空床・性別ポリシーを描画用に整形し、DB 未接続でもデモへフォールバック。
  */
 async function loadData(): Promise<MapData> {
   try {
@@ -83,15 +84,25 @@ async function loadData(): Promise<MapData> {
 
     if (wardRows.length === 0) return demoData();
 
+    // 正の所在: currentBedId で bedId → 在院 を直接マッピング。
+    const occByBedId = new Map<string, (typeof encounters)[number]>();
+    for (const e of encounters) {
+      if (e.currentBedId) occByBedId.set(e.currentBedId, e);
+    }
+    const placedEncIds = new Set([...occByBedId.values()].map((e) => e.id));
+
     let occupied = 0;
     let total = 0;
     const wards: WardView[] = wardRows.map((w) => {
-      const wardPatients = encounters.filter((e) => e.wardId === w.id);
+      // currentBedId で配置済みの在院を除いた残りを、従来の在床順カーソルで補完する。
+      const fallbackPatients = encounters.filter((e) => e.wardId === w.id && !placedEncIds.has(e.id));
       const allBeds = w.rooms.flatMap((r) => r.beds.map((b) => ({ room: r, bed: b })));
       total += allBeds.length;
       let cursor = 0;
       const beds: BedView[] = allBeds.map(({ room, bed }) => {
-        const occ = cursor < wardPatients.length ? wardPatients[cursor++] : null;
+        // この病床に currentBedId 一致の在院がいれば最優先。なければカーソル補完。
+        const direct = occByBedId.get(bed.id) ?? null;
+        const occ = direct ?? (cursor < fallbackPatients.length ? fallbackPatients[cursor++] : null);
         if (occ) occupied += 1;
         return {
           bedId: bed.id,
@@ -215,7 +226,8 @@ export default async function WardMapPage() {
       )}
 
       <p className="text-2xs text-muted">
-        ※ 在床は INPATIENT の在院 Encounter を病棟内の在床順で病床へ割付けて表示します（入退院画面と整合）。
+        ※ 在床は各在院の現在割当病床（Encounter.currentBed / BedAssignment）を正として表示します。
+        割当未設定の在院は病棟内の在床順で補完表示します（入退院画面と整合）。
         転棟・転科・転室は入退院画面の「病床移動シミュレーション」で試算→確定できます。
       </p>
     </PageBody>
