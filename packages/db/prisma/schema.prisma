@@ -116,6 +116,7 @@ enum NoteType {
   ER
   ASSESSMENT
   SYMPTOM_DETAIL
+  HOMECARE
 }
 
 // ClinicalNote / Order version-chain status. SUPERSEDED rows are retained (見読性).
@@ -297,6 +298,18 @@ enum AuditAction {
   RESTRICTED_ACCESS
   MASTER_IMPORT
   PATIENT_MERGE
+  // 病床管理 (WRD1) — 入院/退院/転棟・転科・転室
+  ADMISSION
+  DISCHARGE
+  TRANSFER
+  // 利用者管理 (ADM1) — アカウント操作 / パスワード初期化・変更
+  USER_CREATE
+  USER_UPDATE
+  USER_DISABLE
+  USER_ENABLE
+  ACCOUNT_UNLOCK
+  PASSWORD_CHANGE
+  PASSWORD_RESET
 }
 
 enum MasterType {
@@ -313,6 +326,92 @@ enum ImportStatus {
   SUCCESS
   FAILED
   ROLLED_BACK
+}
+
+// ── 病床管理 (WRD1) — FR-WRD-01 ──
+enum AdmissionStatus {
+  ADMITTED
+  DISCHARGED
+  TRANSFERRED_OUT
+  CANCELLED
+}
+
+// 病床割当の発生理由（入院初回 / 転棟 / 転科 / 転室 / 退院による解放）。
+enum BedMoveReason {
+  ADMISSION
+  WARD_TRANSFER
+  DEPARTMENT_TRANSFER
+  ROOM_TRANSFER
+  DISCHARGE
+}
+
+// ── 看護 (WRD2) — FR-WRD-02 ──
+enum NursingPlanStatus {
+  ACTIVE
+  ACHIEVED
+  REVISED
+  DISCONTINUED
+}
+
+enum NursingPlanItemKind {
+  DIAGNOSIS // 看護診断 / 問題
+  GOAL // 期待される成果 / 目標
+  INTERVENTION_O // O: 観察計画
+  INTERVENTION_T // T: ケア計画
+  INTERVENTION_E // E: 教育計画
+  EVALUATION // 評価
+}
+
+// 褥瘡 DESIGN-R®2020 の深さ判定（depth は重症度合計に含めない通則）。
+enum PressureUlcerDepth {
+  D0 // 皮膚損傷・発赤なし
+  D1 // 持続する発赤
+  D2 // 真皮までの損傷
+  D3 // 皮下組織までの損傷
+  D4 // 皮下組織を超える損傷
+  D5 // 関節腔・体腔に至る損傷
+  DDTI // 深部損傷褥瘡(DTI)疑い
+  DU // 深さ判定不能
+}
+
+// ── 救急 (ER1) — FR-ER-01 ──
+// 同意区分：救急の意識障害等で本人同意が取れない場合の根拠。
+enum ConsentType {
+  EXPLICIT // 本人の明示同意
+  IMPLIED // 黙示の同意 / 緊急避難
+  SURROGATE // 家族・代諾者の同意
+  EMERGENCY_EXCEPTION // 応急処置（同意取得困難）
+}
+
+// ── 在宅 (HOM1) — FR-HOM-01 ──
+enum HomeVisitKind {
+  DOCTOR // 訪問診療（医師）
+  NURSE // 訪問看護
+  HOME_CARE_GUIDANCE // 居宅療養管理指導
+  REHAB // 訪問リハビリ
+  PHARMACIST // 訪問薬剤管理指導
+  OTHER
+}
+
+// オフライン記録の同期状態（端末キュー → サーバ永続化）。
+enum HomeVisitSyncState {
+  SYNCED // サーバ確定（オンライン入力 or 同期完了）
+  OFFLINE_QUEUED // 端末キュー由来（後追い同期）
+}
+
+// ── 処方/オーダセット (RX1/RX2) ──
+enum OrderSetKind {
+  RX // 処方セット
+  ORDER // オーダセット（検査・注射 等の混在）
+}
+
+// 用法区分（用法マスタ：内服/頓服/外用）。
+enum UsageCategory {
+  INTERNAL // 内服
+  AS_NEEDED // 頓服
+  EXTERNAL // 外用
+  INJECTION // 注射
+  OTHER
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -332,11 +431,12 @@ model Clinic {
 }
 
 model Department {
-  id       String @id @default(cuid())
-  clinicId String
-  code     String
-  name     String
-  clinic   Clinic @relation(fields: [clinicId], references: [id])
+  id        String   @id @default(cuid())
+  clinicId  String
+  code      String
+  name      String
+  createdAt DateTime @default(now())
+  clinic    Clinic   @relation(fields: [clinicId], references: [id])
 
   @@unique([clinicId, code])
 }
@@ -349,6 +449,9 @@ model Ward {
   clinic   Clinic @relation(fields: [clinicId], references: [id])
   rooms    Room[]
 
+  admissions     Admission[]
+  bedAssignments BedAssignment[]
+
   @@unique([clinicId, code])
 }
 
@@ -360,6 +463,8 @@ model Room {
   ward         Ward   @relation(fields: [wardId], references: [id])
   beds         Bed[]
 
+  bedAssignments BedAssignment[]
+
   @@unique([wardId, code])
 }
 
@@ -368,6 +473,10 @@ model Bed {
   roomId String
   code   String
   room   Room   @relation(fields: [roomId], references: [id])
+
+  // 現在この病床にいる受診（在床中の Encounter）。NULL = 空床。
+  currentEncounter Encounter?      @relation("BedCurrentEncounter")
+  assignments      BedAssignment[]
 
   @@unique([roomId, code])
 }
@@ -387,12 +496,14 @@ model StaffUser {
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
 
-  clinic      Clinic             @relation(fields: [clinicId], references: [id])
-  credential  StaffCredential?
-  mfaFactors  MfaFactor[]
-  sessions    AuthSession[]
-  permissions UserPermission[]
-  favorites   UserFavoriteTool[]
+  clinic            Clinic                  @relation(fields: [clinicId], references: [id])
+  credential        StaffCredential?
+  mfaFactors        MfaFactor[]
+  sessions          AuthSession[]
+  permissions       UserPermission[]
+  favorites         UserFavoriteTool[]
+  passwordChanges   PasswordChangeHistory[] @relation("PwChangeUser")
+  passwordChangesBy PasswordChangeHistory[] @relation("PwChangeActor")
 
   @@index([clinicId, jobType])
 }
@@ -564,21 +675,26 @@ model Patient {
   mergedIntoId    String? // 患者ID統合 (logical, never physical)
   createdAt       DateTime @default(now())
 
-  clinic       Clinic                 @relation(fields: [clinicId], references: [id])
-  allergies    Allergy[]
-  infections   Infection[]
-  histories    MedicalHistory[]
-  family       FamilyMember[]
-  insurances   Insurance[]
-  profile      PatientProfile?
-  encounters   Encounter[]
-  appointments Appointment[]
-  notes        ClinicalNote[]
-  orders       Order[]
-  acls         PatientAccessControl[]
-  diagnoses    PatientDiagnosis[]
-  referrals    Referral[]
-  labResults   LabResult[]
+  clinic         Clinic                 @relation(fields: [clinicId], references: [id])
+  allergies      Allergy[]
+  infections     Infection[]
+  histories      MedicalHistory[]
+  family         FamilyMember[]
+  insurances     Insurance[]
+  profile        PatientProfile?
+  encounters     Encounter[]
+  appointments   Appointment[]
+  notes          ClinicalNote[]
+  orders         Order[]
+  acls           PatientAccessControl[]
+  diagnoses      PatientDiagnosis[]
+  referrals      Referral[]
+  labResults     LabResult[]
+  admissions     Admission[]
+  bedAssignments BedAssignment[]
+  nursingPlans   NursingPlan[]
+  pressureUlcers PressureUlcer[]
+  homeVisits     HomeVisit[]
 
   @@index([clinicId])
   @@index([kanaLastName, kanaFirstName])
@@ -734,17 +850,24 @@ model Encounter {
   receptionStatus ReceptionStatus @default(UNRECEIVED)
   triageLevel     TriageLevel?
   arrivalMethod   String?
+  // 現在割り当てられている病床 (WRD1)。転室で付け替え、退院で NULL。履歴は BedAssignment。
+  currentBedId    String?         @unique
   isTemporaryId   Boolean         @default(false)
   arrivedAt       DateTime?
   openedByUserId  String?
   createdAt       DateTime        @default(now())
 
-  patient     Patient                     @relation(fields: [patientId], references: [id])
-  appointment Appointment?                @relation(fields: [appointmentId], references: [id])
-  sessions    ClinicalSession[]
-  orders      Order[]
-  transitions EncounterStatusTransition[]
-  labResults  LabResult[]
+  patient        Patient                     @relation(fields: [patientId], references: [id])
+  appointment    Appointment?                @relation(fields: [appointmentId], references: [id])
+  currentBed     Bed?                        @relation("BedCurrentEncounter", fields: [currentBedId], references: [id])
+  sessions       ClinicalSession[]
+  orders         Order[]
+  transitions    EncounterStatusTransition[]
+  labResults     LabResult[]
+  admission      Admission?
+  bedAssignments BedAssignment[]
+  emergencyVisit EmergencyVisit?
+  homeVisits     HomeVisit[]
 
   @@index([receptionStatus, departmentId])
   @@index([patientId])
@@ -1300,6 +1423,7 @@ model ExamMaster {
   refLow              Float?
   refHigh             Float?
   unit                String?
+  points              Int? // 保険点数概算 (display-only; 算定はレセコン委譲＝正本ではない) — EXM1/FR-EXM-01
   sourceMasterVersion String
   provenance          Json
 
@@ -1460,4 +1584,274 @@ model DischargeSummary {
   createdAt       DateTime      @default(now())
 
   @@index([patientId])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 病床管理 (WRD1) — FR-WRD-01. 入退院 (Admission) と病床割当・転室履歴 (BedAssignment)。
+// 既存 Ward/Room/Bed/Encounter リレーションと整合。在床の「現在地」は
+// Encounter.currentBedId、移動の「歴」は BedAssignment（追記中心）で表す。
+// 33WP 実装では admitPatient / transferPatient / dischargePatient が割当病床コード等を
+// 監査 detail に退避していた箇所を、本モデルで本番永続化する。
+// ─────────────────────────────────────────────────────────────────────────────
+
+// 入院エピソード。1 入院 = 1 Admission（INPATIENT Encounter に 1:1）。
+// 更新可（status / dischargedAt の付与）— append-only 対象外（移動の真正性は BedAssignment が担保）。
+model Admission {
+  id               String          @id @default(cuid())
+  patientId        String
+  encounterId      String          @unique
+  wardId           String
+  admittedAt       DateTime        @default(now())
+  dischargedAt     DateTime?
+  status           AdmissionStatus @default(ADMITTED)
+  admissionReason  String?
+  dischargeReason  String?
+  admittedByUserId String?
+  createdAt        DateTime        @default(now())
+
+  patient   Patient   @relation(fields: [patientId], references: [id])
+  encounter Encounter @relation(fields: [encounterId], references: [id])
+  ward      Ward      @relation(fields: [wardId], references: [id])
+
+  @@index([patientId, status])
+  @@index([wardId, status])
+}
+
+// 病床割当・転室の履歴（追記専用）。入院初回割当・転棟・転科・転室・退院解放を 1 行ずつ積む。
+// releasedAt が NULL の行 = 現在有効な割当。所在管理は法定（真正性）→ db/triggers.sql で UPDATE/DELETE 禁止。
+model BedAssignment {
+  id               String        @id @default(cuid())
+  encounterId      String
+  patientId        String
+  wardId           String
+  roomId           String?
+  bedId            String?
+  bedCode          String? // bed 行が未マスタ化でも所在を残せるよう生コードも保持
+  reason           BedMoveReason @default(ADMISSION)
+  note             String?
+  assignedAt       DateTime      @default(now())
+  releasedAt       DateTime? // 次の移動 / 退院でこの割当が終了した時刻（履歴クローズ）
+  assignedByUserId String?
+  createdAt        DateTime      @default(now())
+
+  encounter Encounter @relation(fields: [encounterId], references: [id])
+  patient   Patient   @relation(fields: [patientId], references: [id])
+  ward      Ward      @relation(fields: [wardId], references: [id])
+  room      Room?     @relation(fields: [roomId], references: [id])
+  bed       Bed?      @relation(fields: [bedId], references: [id])
+
+  @@index([encounterId, assignedAt])
+  @@index([patientId, assignedAt])
+  @@index([bedId])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 看護 (WRD2) — FR-WRD-02. 看護計画 (NursingPlan + Item) ＋ 褥瘡 DESIGN-R (PressureUlcer)。
+// 33WP 実装では ClinicalDocument(docType=看護計画/褥瘡DESIGN-R) で代替していた箇所を本番化。
+// 計画は改訂運用のため更新可（append-only 対象外）。褥瘡評価は記録性 → 追記専用。
+// ─────────────────────────────────────────────────────────────────────────────
+
+// 看護計画（看護診断 → 期待される成果 → 看護介入(O-T-E) → 評価）。更新可。
+model NursingPlan {
+  id           String            @id @default(cuid())
+  patientId    String
+  encounterId  String?
+  title        String?
+  status       NursingPlanStatus @default(ACTIVE)
+  startedOn    DateTime          @default(now())
+  evaluatedOn  DateTime?
+  authorUserId String
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+
+  patient Patient           @relation(fields: [patientId], references: [id])
+  items   NursingPlanItem[]
+
+  @@index([patientId, status])
+}
+
+model NursingPlanItem {
+  id        String              @id @default(cuid())
+  planId    String
+  kind      NursingPlanItemKind
+  content   String
+  sortOrder Int                 @default(0)
+  createdAt DateTime            @default(now())
+
+  plan NursingPlan @relation(fields: [planId], references: [id])
+
+  @@index([planId])
+}
+
+// 褥瘡 DESIGN-R®2020 評価（各項目の重症度コード＋点数、合計、判定日）。追記専用（記録の真正性）。
+// 合計 (totalScore) は Depth を除く 6 項目の合計（DESIGN-R 通則）。訂正は新規行で表現。
+// db/triggers.sql で UPDATE/DELETE 禁止。
+model PressureUlcer {
+  id                String             @id @default(cuid())
+  patientId         String
+  encounterId       String?
+  site              String?
+  depth             PressureUlcerDepth @default(DU)
+  depthScore        Int                @default(0) // 重症度合計には含めない
+  exudateScore      Int                @default(0)
+  sizeScore         Int                @default(0)
+  inflammationScore Int                @default(0)
+  granulationScore  Int                @default(0)
+  necroticScore     Int                @default(0)
+  pocketScore       Int                @default(0)
+  totalScore        Int                @default(0) // Depth 除く 6 項目合計
+  note              String?
+  assessedOn        DateTime           @default(now()) // 判定日
+  assessedByUserId  String
+  createdAt         DateTime           @default(now())
+
+  patient Patient @relation(fields: [patientId], references: [id])
+
+  @@index([patientId, assessedOn])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 救急 (ER1) — FR-ER-01. 救急受診の主訴/搬送方法/同意区分/トリアージ詳細。
+// TriageLevel は既存 enum / Encounter.triageLevel を再利用。受付時点の固定情報を
+// EmergencyVisit に 1:1 で持つ（再トリアージは Encounter.triageLevel を更新＝既存挙動）。
+// 33WP 実装では registerEmergency が chiefComplaint/consentType を監査 detail に退避していた箇所を本番化。
+// 受付記録（救急時点の事実）として追記専用。db/triggers.sql で UPDATE/DELETE 禁止。
+// ─────────────────────────────────────────────────────────────────────────────
+model EmergencyVisit {
+  id                   String       @id @default(cuid())
+  encounterId          String       @unique
+  patientId            String? // 身元不明（仮ID）受付では NULL 可
+  chiefComplaint       String?
+  arrivalMethod        String? // 救急車/ドクターカー/独歩 等（Encounter.arrivalMethod の確定写し）
+  triageLevelAtArrival TriageLevel? // 受付時トリアージ（再トリアージ前の初期値を保全）
+  consentType          ConsentType?
+  isUnidentified       Boolean      @default(false)
+  arrivedAt            DateTime     @default(now())
+  receivedByUserId     String?
+  createdAt            DateTime     @default(now())
+
+  encounter Encounter @relation(fields: [encounterId], references: [id])
+
+  @@index([patientId])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 在宅 (HOM1) — FR-HOM-01. 訪問録（HomeVisit）。訪問スケジュールは既存 Appointment(kind=HOMECARE)
+// ＋ Encounter(HOMECARE) を再利用（schema を増やさない）。訪問録本文/バイタル/オフライン同期は
+// HomeVisit に永続化。33WP 実装では syncOfflineRecords が note/vitals を監査 detail / SS-MIX2 へのみ
+// 退避していた箇所を本番化。訪問録は記録性 → 追記専用。db/triggers.sql で UPDATE/DELETE 禁止。
+// ※ ClinicalNote 経由で残す場合は NoteType.HOMECARE を利用可（本モデルはモバイル/オフライン同期の一次受け）。
+// ─────────────────────────────────────────────────────────────────────────────
+model HomeVisit {
+  id               String             @id @default(cuid())
+  patientId        String
+  encounterId      String?
+  appointmentId    String? // 訪問予定（Appointment）から起こした場合の参照
+  visitKind        HomeVisitKind      @default(DOCTOR)
+  visitedAt        DateTime           @default(now())
+  note             String? // S/O/A/P を 1 本にまとめた訪問記録本文
+  vitals           String? // 任意・自由記述（BP/HR/SpO2/BT 等）
+  syncState        HomeVisitSyncState @default(SYNCED)
+  clientId         String? // オフライン端末が採番した冪等同期キー（重複同期防止）
+  recordedByUserId String
+  createdAt        DateTime           @default(now())
+
+  patient   Patient    @relation(fields: [patientId], references: [id])
+  encounter Encounter? @relation(fields: [encounterId], references: [id])
+
+  // 端末由来の冪等同期：同一 clientId は 1 度しか確定させない。
+  @@unique([clientId])
+  @@index([patientId, visitedAt])
+  @@index([appointmentId])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 処方/オーダセット (RX1/RX2) — FR-RX-02. 処方セット・オーダセット (OrderSet + Item) と
+// 用法マスタ (UsageMaster)。Order.setId（既存）から参照する識別子の発番元。
+// 33WP 実装では「処方セットの保存/呼出」を Order.setId 文字列のみで運用していた箇所を本番化。
+// 設定（マスタ/テンプレート）系のため更新可（append-only 対象外）。
+// ─────────────────────────────────────────────────────────────────────────────
+
+// 処方セット / オーダセットのヘッダ。発行時に Order.setId へこの id を載せてトレースする。
+model OrderSet {
+  id              String       @id @default(cuid())
+  clinicId        String?
+  departmentId    String?
+  ownerUserId     String? // DOCTOR スコープ（個人セット）の所有者。NULL = 共有
+  kind            OrderSetKind @default(RX)
+  code            String?
+  name            String
+  description     String?
+  isActive        Boolean      @default(true)
+  sortOrder       Int          @default(0)
+  createdByUserId String?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  items OrderSetItem[]
+
+  @@index([clinicId, kind])
+  @@index([ownerUserId])
+}
+
+// セット明細。RX セットは薬剤＋用法＋用量、ORDER セットは任意オーダ種別を payload(detail) で保持。
+model OrderSetItem {
+  id            String     @id @default(cuid())
+  setId         String
+  orderType     OrderType? // ORDER セット時のオーダ種別（RX セットでは RX 固定/NULL 可）
+  drugProductId String? // RX セットの薬剤
+  examMasterId  String? // 検査セットの検査項目
+  usageCode     String? // 用法（UsageMaster.code を参照可）
+  dosePerTime   Float?
+  doseUnit      String?
+  timesPerDay   Float?
+  days          Int?
+  route         String?
+  detail        Json? // ORDER セットの自由 payload（注射/処置 等）
+  sortOrder     Int        @default(0)
+  createdAt     DateTime   @default(now())
+
+  set OrderSet @relation(fields: [setId], references: [id])
+
+  @@index([setId])
+}
+
+// 用法マスタ（内服/頓服/外用・コード・表示）。PrescriptionItem.usageCode / OrderSetItem.usageCode の参照元。
+// 更新可（マスタ運用）。
+model UsageMaster {
+  id                 String        @id @default(cuid())
+  clinicId           String?
+  code               String        @unique
+  displayName        String // 表示名（例: 毎食後 / 就寝前 / 頓用 / 外用）
+  category           UsageCategory @default(INTERNAL)
+  timing             String? // タイミング自由記述（例: 朝・昼・夕 食後）
+  defaultTimesPerDay Float?
+  isAsNeeded         Boolean       @default(false) // 頓服（日数任意判定に使用）
+  isActive           Boolean       @default(true)
+  sortOrder          Int           @default(0)
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+
+  @@index([clinicId, category])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// パスワード変更履歴 (ADM1) — FR-SEC-06 / 別紙1 §1.1. 利用者管理のパスワード初期化・変更を
+// 履歴として残す（StaffCredential は現在値のみ保持のため、変更の歴を本モデルで補完）。
+// 33WP 実装では resetPassword 等が監査にのみ残していた変更歴を本番化。
+// 履歴の真正性 → 追記専用。db/triggers.sql で UPDATE/DELETE 禁止。平文/ハッシュは保持しない。
+// ─────────────────────────────────────────────────────────────────────────────
+model PasswordChangeHistory {
+  id              String   @id @default(cuid())
+  userId          String
+  changedAt       DateTime @default(now())
+  changedByUserId String? // 本人なら userId と同値 / 管理者初期化なら管理者の id
+  reason          String? // RESET / EXPIRED / SELF_CHANGE / UNLOCK 等
+  mustChangeSet   Boolean  @default(false) // この変更で mustChange を立てたか（初期化）
+  terminalId      String?
+
+  user      StaffUser  @relation("PwChangeUser", fields: [userId], references: [id])
+  changedBy StaffUser? @relation("PwChangeActor", fields: [changedByUserId], references: [id])
+
+  @@index([userId, changedAt])
 }

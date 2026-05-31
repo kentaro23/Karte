@@ -28,6 +28,18 @@ const POLICIES: Record<string, Policy> = {
   EncounterStatusTransition: { allowUpdate: [] },
   // 検査結果は確定後不変 (FR-LAB-01). 訂正は新規 resulted 行で。
   LabResult: { allowUpdate: [] },
+  // ── 本番永続化スキーマ拡張の「記録」性モデル（真正性）。訂正は新規行で表現。──
+  // 病床割当・転室履歴 (WRD1)。内容は不変。次の移動/退院で当該割当を閉じる releasedAt の付与のみ許容
+  // （safety 行の validTo と同じ close-out 規則）。DELETE は禁止。
+  BedAssignment: { allowUpdate: ['releasedAt'] },
+  // 褥瘡 DESIGN-R 評価 (WRD2)。確定後不変。再評価は新規行。
+  PressureUlcer: { allowUpdate: [] },
+  // 救急受付記録 (ER1)。受付時点の事実は不変（再トリアージは Encounter 側）。
+  EmergencyVisit: { allowUpdate: [] },
+  // 訪問録 (HOM1)。記録性。オフライン同期後不変。
+  HomeVisit: { allowUpdate: [] },
+  // パスワード変更履歴 (ADM1)。改ざん不可。
+  PasswordChangeHistory: { allowUpdate: [] },
 };
 
 export class AppendOnlyViolation extends Error {

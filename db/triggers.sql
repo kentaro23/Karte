@@ -96,6 +96,40 @@ DROP TRIGGER IF EXISTS trg_immutable_lab_result ON "LabResult";
 CREATE TRIGGER trg_immutable_lab_result BEFORE UPDATE OR DELETE ON "LabResult"
   FOR EACH ROW EXECUTE FUNCTION medixus_immutable();
 
+-- ── 本番永続化スキーマ拡張の「記録」性モデル (真正性) ───────────────────────────
+-- 病床割当・転室履歴 (WRD1). 内容は不変、次の移動/退院で当該割当を閉じる releasedAt の
+-- 付与のみ許容 (close-out). DELETE は禁止。所在管理＝法定の真正性。
+CREATE OR REPLACE FUNCTION medixus_guard_bed_assignment() RETURNS trigger AS $$
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    RAISE EXCEPTION 'append-only violation: DELETE on "BedAssignment" forbidden (所在管理・真正性).';
+  END IF;
+  IF (to_jsonb(NEW) - 'releasedAt') IS DISTINCT FROM (to_jsonb(OLD) - 'releasedAt') THEN
+    RAISE EXCEPTION 'append-only violation: "BedAssignment" is immutable except releasedAt (close-out only). 移動は新規行で。';
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_guard_bed_assignment ON "BedAssignment";
+CREATE TRIGGER trg_guard_bed_assignment BEFORE UPDATE OR DELETE ON "BedAssignment"
+  FOR EACH ROW EXECUTE FUNCTION medixus_guard_bed_assignment();
+
+-- 褥瘡 DESIGN-R 評価 (WRD2)・救急受付記録 (ER1)・訪問録 (HOM1)・パスワード変更履歴 (ADM1).
+-- いずれも確定後不変。再評価/訂正は新規行で表現。
+DROP TRIGGER IF EXISTS trg_immutable_pressure_ulcer ON "PressureUlcer";
+CREATE TRIGGER trg_immutable_pressure_ulcer BEFORE UPDATE OR DELETE ON "PressureUlcer"
+  FOR EACH ROW EXECUTE FUNCTION medixus_immutable();
+DROP TRIGGER IF EXISTS trg_immutable_emergency_visit ON "EmergencyVisit";
+CREATE TRIGGER trg_immutable_emergency_visit BEFORE UPDATE OR DELETE ON "EmergencyVisit"
+  FOR EACH ROW EXECUTE FUNCTION medixus_immutable();
+DROP TRIGGER IF EXISTS trg_immutable_home_visit ON "HomeVisit";
+CREATE TRIGGER trg_immutable_home_visit BEFORE UPDATE OR DELETE ON "HomeVisit"
+  FOR EACH ROW EXECUTE FUNCTION medixus_immutable();
+DROP TRIGGER IF EXISTS trg_immutable_pw_change ON "PasswordChangeHistory";
+CREATE TRIGGER trg_immutable_pw_change BEFORE UPDATE OR DELETE ON "PasswordChangeHistory"
+  FOR EACH ROW EXECUTE FUNCTION medixus_immutable();
+
 -- ── 2. Tamper-evident audit hash-chain ───────────────────────────────────────
 -- 別紙3 #25-30. Each row's hash binds the previous row's hash (sha256).
 
